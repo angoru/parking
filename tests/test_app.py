@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import calendario
+from app import calendario, seguridad
 from app.main import APP_VERSION, app
+
+CLAVE = "clave-de-prueba-123"
 
 # Miércoles normal: el siguiente laborable es el jueves 15
 MIERCOLES = date(2026, 10, 14)
@@ -18,16 +20,18 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PARKING_DB", str(tmp_path / "test.db"))
     monkeypatch.setenv("PARKING_TOTAL", "5")
     monkeypatch.delenv("ADMIN_USER", raising=False)
-    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD", CLAVE)
+    monkeypatch.setenv("RESERVAS_POR_HORA", "1000")
     monkeypatch.setattr(calendario, "hoy", lambda: MIERCOLES)
+    seguridad.limitador.reset()
     with TestClient(app) as c:
         yield c
 
 
 @pytest.fixture
 def admin(client):
-    """Cliente con la sesión de admin iniciada (usuario admin, contraseña admin)."""
-    r = client.post("/admin/login", data={"usuario": "admin", "password": "admin"})
+    """Cliente con la sesión de admin iniciada."""
+    r = client.post("/admin/login", data={"usuario": "admin", "password": CLAVE})
     assert r.url.path == "/admin"
     return client
 
@@ -69,7 +73,10 @@ def test_version_visible(client, admin):
     assert APP_VERSION == Path("VERSION").read_text().strip()
     assert re.fullmatch(r"\d+\.\d+\.\d+", APP_VERSION)
     assert app.version == APP_VERSION
-    assert f"Versión v{APP_VERSION}" in client.get("/").text
+    html = client.get("/").text
+    assert f"Versión v{APP_VERSION}" in html
+    assert f"style.css?v={APP_VERSION}" in html
+    assert f"app.js?v={APP_VERSION}" in html
     assert f"Versión v{APP_VERSION}" in admin.get("/admin").text
 
 
@@ -100,7 +107,7 @@ def test_siguiente_laborable(client, monkeypatch, hoy, esperado, etiqueta):
         assert f">{etiqueta}</a>" in html
     r = reservar(client, 1)
     assert r.url.path == "/confirmacion"
-    assert f"fecha={esperado.isoformat()}" in str(r.url)
+    assert re.search(r'<p class="sub">[^<]*\b%d de ' % esperado.day, r.text)
 
 
 def test_no_laborable_sin_pestana_hoy(client, monkeypatch):
@@ -112,10 +119,10 @@ def test_no_laborable_sin_pestana_hoy(client, monkeypatch):
 
 def test_admin_puede_anadir_festivo(admin):
     admin.post("/admin/festivos", data={"fecha": JUEVES.isoformat(), "nombre": "Fiesta inventada"})
-    assert "fecha=2026-10-16" in str(reservar(admin, 1).url)
+    assert "Viernes 16 de octubre" in reservar(admin, 1).text
     assert "Fiesta inventada" in admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
     admin.post(f"/admin/festivos/{JUEVES.isoformat()}/borrar")
-    assert "fecha=2026-10-15" in str(reservar(admin, 2, nombre="Otro").url)
+    assert "Mañana, jueves 15 de octubre" in reservar(admin, 2, nombre="Otro").text
 
 
 # --- Público ---------------------------------------------------------------
@@ -309,7 +316,7 @@ def test_admin_requiere_login(client):
 
 
 def test_login_incorrecto(client):
-    r = client.post("/admin/login", data={"usuario": "admin", "password": "mal"})
+    r = client.post("/admin/login", data={"usuario": "admin", "password": "admin"})
     assert "Usuario o contraseña incorrectos" in r.text
     assert client.get("/admin", follow_redirects=False).status_code == 303
 

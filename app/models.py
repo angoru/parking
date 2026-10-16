@@ -1,11 +1,39 @@
 import sqlite3
+import unicodedata
 from datetime import date
 
 from . import calendario
 
+NOMBRE_MAX = 60
+NUMERO_MAX = 99999
+TEXTO_MAX = 80
+
 
 def _hoy() -> str:
     return calendario.hoy().isoformat()
+
+
+def limpiar_texto(texto: str | None) -> str:
+    """Quita caracteres de control y espacios sobrantes de un texto escrito por alguien."""
+    sin_control = "".join(c for c in (texto or "") if not unicodedata.category(c).startswith("C"))
+    return " ".join(sin_control.split())
+
+
+def validar_nombre(nombre: str, maximo: int = NOMBRE_MAX) -> tuple[str, str | None]:
+    """Devuelve el nombre limpio y un error si no es válido."""
+    nombre = limpiar_texto(nombre)
+    if not nombre:
+        return nombre, "Indica tu nombre."
+    if len(nombre) > maximo:
+        return nombre, f"El nombre es demasiado largo (máximo {maximo} caracteres)."
+    return nombre, None
+
+
+def _bloquear_escritura(conn: sqlite3.Connection) -> None:
+    """Empieza la transacción antes de comprobar nada: así comprobar y guardar es atómico
+    aunque lleguen varias reservas a la vez (las demás esperan su turno)."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
 
 
 def get_config(conn: sqlite3.Connection, key: str) -> str | None:
@@ -31,7 +59,7 @@ def parse_numeros(texto: str) -> list[int] | None:
         if not desde.strip().isdigit() or (hasta and not hasta.strip().isdigit()):
             return None
         desde, hasta = int(desde), int(hasta or desde)
-        if hasta < desde or hasta - desde > 500:
+        if hasta < desde or hasta - desde > 500 or hasta > NUMERO_MAX:
             return None
         numeros.extend(range(desde, hasta + 1))
     return numeros or None
@@ -73,15 +101,17 @@ def update_plaza(conn: sqlite3.Connection, plaza_id: int, numero: int, tipo: str
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
-    if numero < 0:
-        return "El número de plaza no puede ser negativo."
+    if not 0 <= numero <= NUMERO_MAX:
+        return f"El número de plaza debe estar entre 0 y {NUMERO_MAX}."
     if numero != plaza["numero"] and conn.execute(
         "SELECT 1 FROM plazas WHERE numero = ? AND id != ?", (numero, plaza_id)
     ).fetchone():
         return f"Ya existe la plaza {numero}."
     if tipo not in ("nominal", "reservable"):
         return "Tipo de plaza no válido."
-    titular = (titular or "").strip() or None
+    titular = limpiar_texto(titular) or None
+    if titular and len(titular) > NOMBRE_MAX:
+        return f"El titular es demasiado largo (máximo {NOMBRE_MAX} caracteres)."
     if tipo == "nominal":
         if not titular:
             return "Una plaza fija necesita titular."
@@ -168,9 +198,10 @@ def reservar(
     comprobar_nombre: bool = True, excluir_solicitud: int | None = None,
 ) -> str | None:
     """Crea una reserva. Las reglas de qué día se puede reservar se aplican en las rutas."""
-    nombre = nombre.strip()
-    if not nombre:
-        return "Indica tu nombre."
+    nombre, error = validar_nombre(nombre)
+    if error:
+        return error
+    _bloquear_escritura(conn)
     if fecha < calendario.hoy():
         return "No se puede reservar en una fecha pasada."
     plaza = get_plaza(conn, plaza_id)
@@ -180,19 +211,23 @@ def reservar(
         return f"La plaza {plaza['numero']} ya está ocupada ese día."
     if comprobar_nombre and _nombre_ocupado(conn, nombre, fecha, excluir_solicitud):
         return f"{nombre} ya tiene una plaza o una solicitud ese día."
-    conn.execute(
-        "INSERT INTO reservas (plaza_id, fecha, nombre) VALUES (?, ?, ?)",
-        (plaza_id, fecha.isoformat(), nombre),
-    )
+    try:
+        conn.execute(
+            "INSERT INTO reservas (plaza_id, fecha, nombre) VALUES (?, ?, ?)",
+            (plaza_id, fecha.isoformat(), nombre),
+        )
+    except sqlite3.IntegrityError:
+        return f"La plaza {plaza['numero']} ya está ocupada ese día."
     return None
 
 
 # --- Solicitudes para el mismo día -------------------------------------------
 
 def solicitar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) -> str | None:
-    nombre = nombre.strip()
-    if not nombre:
-        return "Indica tu nombre."
+    nombre, error = validar_nombre(nombre)
+    if error:
+        return error
+    _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
@@ -277,7 +312,7 @@ def ocupar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) ->
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
-    nombre = nombre.strip()
+    nombre = limpiar_texto(nombre)
     if plaza["tipo"] == "nominal" and esta_libre(conn, plaza_id, fecha) and (
         not nombre or nombre.lower() == plaza["titular"].lower()
     ):
@@ -311,9 +346,11 @@ def festivos_futuros(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def add_festivo(conn: sqlite3.Connection, fecha: date, nombre: str) -> str | None:
-    nombre = nombre.strip()
+    nombre = limpiar_texto(nombre)
     if not nombre:
         return "Indica el nombre del festivo."
+    if len(nombre) > TEXTO_MAX:
+        return f"El nombre del festivo es demasiado largo (máximo {TEXTO_MAX} caracteres)."
     conn.execute(
         "INSERT INTO festivos (fecha, nombre) VALUES (?, ?) ON CONFLICT(fecha) DO UPDATE SET nombre = excluded.nombre",
         (fecha.isoformat(), nombre),

@@ -11,7 +11,7 @@
       <a class="icon-btn" href="/admin?fecha={{ anterior.isoformat() }}{{ q }}" aria-label="Día anterior">‹</a>
       <form method="get" action="/admin" class="date-label">
         <label for="fecha">{{ fecha | fecha_larga }}</label>
-        <input type="date" id="fecha" name="fecha" value="{{ fecha.isoformat() }}" onchange="this.form.submit()">
+        <input type="date" id="fecha" name="fecha" value="{{ fecha.isoformat() }}" data-autoenvio>
         {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
       </form>
       <a class="icon-btn" href="/admin?fecha={{ siguiente.isoformat() }}{{ q }}" aria-label="Día siguiente">›</a>
@@ -96,7 +96,7 @@
             <form method="post" action="/admin/plazas/{{ p.id }}/ocupar">
               <input type="hidden" name="fecha" value="{{ fecha.isoformat() }}">
               {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
-              <input name="nombre" placeholder="{{ p.titular if p.estado == 'nominal_liberada' else 'Nombre' }}"
+              <input name="nombre" maxlength="{{ nombre_max }}" placeholder="{{ p.titular if p.estado == 'nominal_liberada' else 'Nombre' }}"
                      {% if p.estado == 'libre' %}required{% endif %} aria-label="Nombre">
               <button class="btn sm primary" type="submit">OK</button>
             </form>

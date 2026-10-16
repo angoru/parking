@@ -1,28 +1,29 @@
-import hashlib
-import hmac
 import os
-import secrets
-import time
+import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import calendario, db, models
+from . import calendario, db, models, seguridad
 
 BASE_DIR = Path(__file__).parent
 APP_VERSION = (BASE_DIR.parent / "VERSION").read_text(encoding="utf-8").strip()
 NOMBRE_COOKIE = "parking_nombre"
 SESION_COOKIE = "parking_admin"
-SESION_DURACION = 30 * 24 * 3600
 DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+# El estilo en línea solo se usa para el ancho de la barra de ocupación; scripts, solo los propios
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
 
 
 @asynccontextmanager
@@ -31,10 +32,35 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plazas de garaje", version=APP_VERSION, lifespan=lifespan)
+# Sin /docs, /redoc ni /openapi.json: no hay API pública que documentar
+app = FastAPI(title="Plazas de garaje", version=APP_VERSION, lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["app_version"] = APP_VERSION
+
+
+def es_https(request: Request) -> bool:
+    return request.url.scheme == "https"
+
+
+def cookie_segura(request: Request) -> bool:
+    return es_https(request) or os.environ.get("COOKIE_SECURE") == "1"
+
+
+@app.middleware("http")
+async def cabeceras_de_seguridad(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["Content-Security-Policy"] = CSP
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "same-origin"
+    resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path.startswith("/admin"):
+        resp.headers["Cache-Control"] = "no-store"
+    if es_https(request):
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return resp
 
 
 def fecha_larga(d: date | str) -> str:
@@ -54,6 +80,9 @@ def get_conn():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -65,9 +94,37 @@ def parse_fecha(valor: str | None) -> date:
         return calendario.hoy()
 
 
-def redirect(path: str, **params) -> RedirectResponse:
+def ip_cliente(request: Request) -> str:
+    return request.client.host if request.client else "desconocida"
+
+
+# --- Respuestas: los mensajes van en una cookie de un solo uso, nunca en la URL ----------
+
+def redirect(path: str, msg: str | None = None, error: str | None = None, conf: dict | None = None,
+             **params) -> RedirectResponse:
     query = urlencode({k: v for k, v in params.items() if v is not None})
-    return RedirectResponse(f"{path}?{query}" if query else path, status_code=status.HTTP_303_SEE_OTHER)
+    resp = RedirectResponse(f"{path}?{query}" if query else path, status_code=status.HTTP_303_SEE_OTHER)
+    flash = {k: v for k, v in {"msg": msg, "error": error, "conf": conf}.items() if v}
+    if flash:
+        resp.set_cookie(seguridad.FLASH_COOKIE, seguridad.codificar_flash(flash),
+                        max_age=60, httponly=True, samesite="lax")
+    return resp
+
+
+def flash(request: Request) -> dict:
+    return seguridad.leer_flash(request.cookies.get(seguridad.FLASH_COOKIE))
+
+
+def render(request: Request, template: str, context: dict, status_code: int = 200):
+    mensajes = flash(request)
+    resp = templates.TemplateResponse(request, template, {
+        "msg": mensajes.get("msg"),
+        "error": mensajes.get("error"),
+        **context,
+    }, status_code=status_code)
+    if mensajes:
+        resp.delete_cookie(seguridad.FLASH_COOKIE)
+    return resp
 
 
 # --- Días que puede elegir quien reserva -------------------------------------
@@ -92,30 +149,19 @@ def elegir_dia(conn, dia: str | None) -> tuple[str, date, dict]:
 
 # --- Sesión del admin ----------------------------------------------------------
 
-def _firma(conn, expira: int) -> str:
-    secreto = models.get_config(conn, "secret").encode()
-    return hmac.new(secreto, f"admin:{expira}".encode(), hashlib.sha256).hexdigest()
+def _ir_a(path: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": path})
 
 
-def sesion_valida(request: Request, conn) -> bool:
-    try:
-        expira, firma = request.cookies.get(SESION_COOKIE, "").split(".")
-        return int(expira) > time.time() and hmac.compare_digest(firma, _firma(conn, int(expira)))
-    except ValueError:
-        return False
+def require_sesion(request: Request, conn=Depends(get_conn)) -> None:
+    if not seguridad.sesion_valida(conn, request.cookies.get(SESION_COOKIE)):
+        raise _ir_a("/admin/login")
 
 
-def require_admin(request: Request, conn=Depends(get_conn)) -> None:
-    if not sesion_valida(request, conn):
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/admin/login"})
-
-
-def credenciales_correctas(usuario: str, password: str) -> bool:
-    ok_usuario = secrets.compare_digest(usuario.encode(), os.environ.get("ADMIN_USER", "admin").encode())
-    password_file = os.environ.get("ADMIN_PASSWORD_FILE")
-    expected_password = Path(password_file).read_text() if password_file else os.environ.get("ADMIN_PASSWORD", "admin")
-    ok_password = secrets.compare_digest(password.encode(), expected_password.encode())
-    return ok_usuario and ok_password
+def require_admin(request: Request, conn=Depends(get_conn), _=Depends(require_sesion)) -> None:
+    # Con la contraseña de fábrica solo se puede entrar a cambiarla
+    if seguridad.usa_password_por_defecto(conn):
+        raise _ir_a("/admin/password")
 
 
 # --- Público ---------------------------------------------------------------
@@ -127,14 +173,13 @@ def health(conn=Depends(get_conn)):
 
 
 @app.get("/")
-def libres(request: Request, dia: str | None = None, error: str | None = None, conn=Depends(get_conn)):
+def libres(request: Request, dia: str | None = None, conn=Depends(get_conn)):
     dia, fecha, dias = elegir_dia(conn, dia)
-    return templates.TemplateResponse(request, "libres.html", {
+    return render(request, "libres.html", {
         "dia": dia,
         "fecha": fecha,
         "dias": dias,
         "plazas": models.plazas_libres(conn, fecha),
-        "error": error,
     })
 
 
@@ -144,33 +189,53 @@ def reservar_form(request: Request, plaza_id: int, dia: str | None = None, conn=
     plaza = models.get_plaza(conn, plaza_id)
     if plaza is None or not models.esta_libre(conn, plaza_id, fecha):
         return redirect("/", dia=dia, error="Esta plaza ya no está libre.")
-    return templates.TemplateResponse(request, "reservar.html", {
+    return render(request, "reservar.html", {
         "plaza": plaza,
         "dia": dia,
         "fecha": fecha,
-        "nombre": request.cookies.get(NOMBRE_COOKIE, ""),
+        "nombre": unquote(request.cookies.get(NOMBRE_COOKIE, "")),
+        "nombre_max": models.NOMBRE_MAX,
     })
 
 
-def confirmar(tipo: str, plaza, fecha: date, nombre: str) -> RedirectResponse:
-    resp = redirect("/confirmacion", tipo=tipo, plaza=plaza["numero"], fecha=fecha.isoformat())
-    resp.set_cookie(NOMBRE_COOKIE, nombre.strip(), max_age=365 * 24 * 3600, samesite="lax")
+def demasiadas_reservas(request: Request):
+    """Frena los scripts que reservan muchas plazas con nombres inventados."""
+    if seguridad.limitador.excedido(f"reserva:{ip_cliente(request)}", seguridad.reservas_por_hora(),
+                                    seguridad.RESERVAS_VENTANA):
+        return render(request, "aviso.html", {
+            "titulo": "Demasiadas reservas",
+            "texto": "Demasiadas reservas desde este dispositivo en la última hora. Inténtalo más tarde "
+                     "o escribe al admin.",
+        }, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
+    return None
+
+
+def confirmar(request: Request, tipo: str, plaza, fecha: date, nombre: str) -> RedirectResponse:
+    seguridad.limitador.anotar(f"reserva:{ip_cliente(request)}")
+    resp = redirect("/confirmacion", conf={"tipo": tipo, "plaza": plaza["numero"], "fecha": fecha.isoformat()})
+    resp.set_cookie(NOMBRE_COOKIE, quote(models.limpiar_texto(nombre)), max_age=365 * 24 * 3600,
+                    samesite="lax", secure=cookie_segura(request))
     return resp
 
 
 @app.post("/reservar/{plaza_id}")
-def reservar(plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+def reservar(request: Request, plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+    if bloqueo := demasiadas_reservas(request):
+        return bloqueo
     fecha = dias_usuario(conn)["siguiente"]
     error = models.reservar(conn, plaza_id, fecha, nombre)
     if error:
         return redirect("/", error=error)
     plaza = models.get_plaza(conn, plaza_id)
-    models.avisar(conn, f"{nombre.strip()} ha reservado la plaza {plaza['numero']} para {fecha_larga(fecha).lower()}.")
-    return confirmar("reserva", plaza, fecha, nombre)
+    nombre = models.limpiar_texto(nombre)
+    models.avisar(conn, f"{nombre} ha reservado la plaza {plaza['numero']} para {fecha_larga(fecha).lower()}.")
+    return confirmar(request, "reserva", plaza, fecha, nombre)
 
 
 @app.post("/solicitar/{plaza_id}")
-def solicitar(plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+def solicitar(request: Request, plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+    if bloqueo := demasiadas_reservas(request):
+        return bloqueo
     fecha = dias_usuario(conn)["hoy"]
     if fecha is None:
         return redirect("/", error="Hoy no es laborable: no se pueden pedir plazas para hoy.")
@@ -178,17 +243,23 @@ def solicitar(plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
     if error:
         return redirect("/", dia="hoy", error=error)
     plaza = models.get_plaza(conn, plaza_id)
-    models.avisar(conn, f"{nombre.strip()} solicita la plaza {plaza['numero']} para hoy.")
-    return confirmar("solicitud", plaza, fecha, nombre)
+    nombre = models.limpiar_texto(nombre)
+    models.avisar(conn, f"{nombre} solicita la plaza {plaza['numero']} para hoy.")
+    return confirmar(request, "solicitud", plaza, fecha, nombre)
 
 
 @app.get("/confirmacion")
-def confirmacion(request: Request, tipo: str, plaza: int, fecha: str, conn=Depends(get_conn)):
-    dia = parse_fecha(fecha)
+def confirmacion(request: Request, conn=Depends(get_conn)):
+    # Los datos llegan en la cookie de un solo uso: no se puede fabricar una confirmación con un enlace
+    conf = flash(request).get("conf")
+    if not isinstance(conf, dict):
+        return redirect("/")
+    dia = parse_fecha(conf.get("fecha"))
+    plaza = conf.get("plaza")
     email = models.get_config(conn, "admin_email")
     asunto = quote(f"Cancelar reserva de la plaza {plaza} para el {fecha_larga(dia).lower()}")
-    return templates.TemplateResponse(request, "confirmacion.html", {
-        "tipo": tipo,
+    return render(request, "confirmacion.html", {
+        "tipo": conf.get("tipo"),
         "plaza": plaza,
         "fecha": dia,
         "email": email,
@@ -196,41 +267,71 @@ def confirmacion(request: Request, tipo: str, plaza: int, fecha: str, conn=Depen
     })
 
 
-# --- Administración --------------------------------------------------------
+# --- Acceso del admin ------------------------------------------------------------
 
 @app.get("/admin/login")
-def login_form(request: Request, error: str | None = None):
-    return templates.TemplateResponse(request, "login.html", {"error": error})
+def login_form(request: Request):
+    return render(request, "login.html", {})
 
 
 @app.post("/admin/login")
-def login(usuario: str = Form(...), password: str = Form(...), conn=Depends(get_conn)):
-    if not credenciales_correctas(usuario, password):
+def login(request: Request, usuario: str = Form(...), password: str = Form(...), conn=Depends(get_conn)):
+    clave = f"login:{ip_cliente(request)}"
+    if seguridad.limitador.excedido(clave, seguridad.LOGIN_MAX_FALLOS, seguridad.LOGIN_VENTANA):
+        return render(request, "login.html", {
+            "error": "Demasiados intentos fallidos. Espera 15 minutos antes de volver a probar.",
+        }, status_code=status.HTTP_429_TOO_MANY_REQUESTS)
+    if not seguridad.credenciales_correctas(conn, usuario, password):
+        seguridad.limitador.anotar(clave)
         return redirect("/admin/login", error="Usuario o contraseña incorrectos.")
-    expira = int(time.time()) + SESION_DURACION
-    resp = redirect("/admin")
-    resp.set_cookie(SESION_COOKIE, f"{expira}.{_firma(conn, expira)}",
-                    max_age=SESION_DURACION, httponly=True, samesite="lax")
+    seguridad.limitador.olvidar(clave)
+    token = seguridad.crear_sesion(conn)
+    resp = redirect("/admin/password" if seguridad.usa_password_por_defecto(conn) else "/admin")
+    resp.set_cookie(SESION_COOKIE, token, max_age=seguridad.SESION_DURACION,
+                    httponly=True, samesite="lax", secure=cookie_segura(request))
     return resp
 
 
 @app.post("/admin/logout")
-def logout():
+def logout(request: Request, conn=Depends(get_conn)):
+    seguridad.cerrar_sesion(conn, request.cookies.get(SESION_COOKIE))
     resp = redirect("/admin/login")
     resp.delete_cookie(SESION_COOKIE)
     return resp
 
 
+@app.get("/admin/password", dependencies=[Depends(require_sesion)])
+def password_form(request: Request, conn=Depends(get_conn)):
+    return render(request, "password.html", {
+        "admin": True,
+        "obligatorio": seguridad.usa_password_por_defecto(conn),
+        "minimo": seguridad.PASSWORD_MINIMA,
+    })
+
+
+@app.post("/admin/password", dependencies=[Depends(require_sesion)])
+def cambiar_password(request: Request, actual: str = Form(...), nueva: str = Form(...), repetir: str = Form(...),
+                     conn=Depends(get_conn)):
+    if not seguridad.password_correcta(conn, actual):
+        return redirect("/admin/password", error="La contraseña actual no es correcta.")
+    error = seguridad.validar_password_nueva(nueva, repetir)
+    if error:
+        return redirect("/admin/password", error=error)
+    seguridad.guardar_password(conn, nueva)
+    seguridad.cerrar_otras_sesiones(conn, request.cookies.get(SESION_COOKIE))
+    return redirect("/admin", msg="Contraseña cambiada. Se han cerrado las demás sesiones.")
+
+
+# --- Administración --------------------------------------------------------
+
 admin_only = [Depends(require_admin)]
 
 
 def admin_page(request: Request, conn, template: str, **context):
-    return templates.TemplateResponse(request, template, {
+    return render(request, template, {
         "admin": True,
         "pendientes": models.contar_pendientes(conn),
         "no_leidos": models.contar_no_leidos(conn),
-        "msg": request.query_params.get("msg"),
-        "error": request.query_params.get("error"),
         **context,
     })
 
@@ -269,14 +370,19 @@ def admin(request: Request, fecha: str | None = None, ver: str | None = None, co
                       resumen=resumen,
                       ver=ver,
                       no_laborable=no_laborable,
-                      pasado=dia < calendario.hoy())
+                      pasado=dia < calendario.hoy(),
+                      nombre_max=models.NOMBRE_MAX)
+
+
+def _filtro(ver: str | None) -> str | None:
+    return ver if ver in FILTROS else None
 
 
 @app.post("/admin/plazas/{plaza_id}/liberar", dependencies=admin_only)
 def admin_liberar(plaza_id: int, fecha: str = Form(...), ver: str | None = Form(None), conn=Depends(get_conn)):
     dia = parse_fecha(fecha)
     error = models.liberar(conn, plaza_id, dia)
-    return redirect("/admin", fecha=dia.isoformat(), ver=ver, error=error,
+    return redirect("/admin", fecha=dia.isoformat(), ver=_filtro(ver), error=error,
                     msg=None if error else "Plaza liberada.")
 
 
@@ -285,7 +391,7 @@ def admin_ocupar(plaza_id: int, fecha: str = Form(...), nombre: str = Form(""), 
                  conn=Depends(get_conn)):
     dia = parse_fecha(fecha)
     error = models.ocupar(conn, plaza_id, dia, nombre)
-    return redirect("/admin", fecha=dia.isoformat(), ver=ver, error=error,
+    return redirect("/admin", fecha=dia.isoformat(), ver=_filtro(ver), error=error,
                     msg=None if error else "Plaza ocupada.")
 
 
@@ -322,7 +428,9 @@ def admin_ajustes(request: Request, conn=Depends(get_conn)):
     return admin_page(request, conn, "admin_ajustes.html",
                       email=models.get_config(conn, "admin_email") or "",
                       festivos=models.festivos_futuros(conn),
-                      plazas=models.list_plazas(conn))
+                      plazas=models.list_plazas(conn),
+                      nombre_max=models.NOMBRE_MAX,
+                      texto_max=models.TEXTO_MAX)
 
 
 @app.post("/admin/plazas", dependencies=admin_only)
@@ -343,7 +451,10 @@ def admin_borrar_plaza(plaza_id: int, conn=Depends(get_conn)):
 
 @app.post("/admin/email", dependencies=admin_only)
 def admin_email(email: str = Form(""), conn=Depends(get_conn)):
-    models.set_config(conn, "admin_email", email.strip())
+    email = email.strip()
+    if email and (len(email) > 254 or not EMAIL_RE.fullmatch(email)):
+        return redirect("/admin/ajustes", error="El correo no es válido.")
+    models.set_config(conn, "admin_email", email)
     return redirect("/admin/ajustes", msg="Correo guardado.")
 
 

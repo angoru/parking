@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Versión** | 1.5 |
+| **Versión** | 1.7 |
 | **Estado** | ✅ Implementado · quedan preguntas abiertas (§12) |
 | **Última revisión** | 16/10/2026 |
-| **Código** | `app/` · tests en `tests/test_app.py` (39 casos, todos en verde) |
+| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (68 casos, todos en verde) · despliegue en `DEPLOY.md` |
 
 **Leyenda de estado:** ✅ Implementado · 🟡 Parcial · ⬜ Pendiente
 
@@ -50,7 +50,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | Rol | Identificación | Permisos |
 |---|---|---|
 | **Usuario** | Solo su nombre. No tiene cuenta ni contraseña. | Ver las plazas libres, reservar para el siguiente día laborable y solicitar plaza para hoy. |
-| **Administrador** | Pantalla de acceso con usuario y contraseña (por defecto **admin / admin**). | Ver todas las plazas, liberar u ocupar cualquiera, aprobar o rechazar solicitudes, consultar avisos y configurar plazas, festivos y su correo de contacto. |
+| **Administrador** | Pantalla de acceso con usuario y contraseña. La primera vez se entra con **admin / admin** y la app obliga a elegir una contraseña propia. | Ver todas las plazas, liberar u ocupar cualquiera, aprobar o rechazar solicitudes, consultar avisos y configurar plazas, festivos, su correo de contacto y su contraseña. |
 
 ## 5. Requisitos funcionales
 
@@ -78,7 +78,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | RF-13 | El admin puede **aprobar o rechazar** las solicitudes para el mismo día. | ✅ |
 | RF-14 | **Cada reserva envía un aviso al admin.** Las solicitudes también generan aviso. | ✅ Dentro de la app (ver P-01) |
 | RF-15 | El menú del admin muestra cuántas solicitudes están pendientes y cuántos avisos no se han leído. | ✅ |
-| RF-16 | El admin **inicia sesión** con usuario y contraseña (**admin / admin**) y puede cerrarla. La sesión dura 30 días. | ✅ |
+| RF-16 | El admin **inicia sesión** con usuario y contraseña y puede cerrarla. La sesión dura 30 días. La primera vez entra con **admin / admin** y **debe cambiar la contraseña** antes de usar el panel; después puede cambiarla en Ajustes → Seguridad. | ✅ |
 | RF-17 | El admin **da de alta plazas con su número real**, sueltas o por rangos (por ejemplo, `12, 15, 20-25`). La numeración no tiene que ser consecutiva. | ✅ |
 | RF-17b | Cada plaza se edita **en una sola línea**: número, titular, guardar (✓) y eliminar (✕). **Si tiene titular, es fija; si el titular está vacío, es reservable.** | ✅ |
 | RF-18 | El admin puede **añadir y eliminar festivos**. | ✅ |
@@ -190,9 +190,15 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | RNF-01 | Diseño **pensado primero para el móvil**: botones grandes y formularios que no fuerzan el zoom. Comprobado a 390 px de ancho. Modo oscuro automático. | ✅ |
 | RNF-02 | Sin JavaScript de terceros en el navegador. Páginas ligeras generadas en el servidor. | ✅ |
 | RNF-03 | Datos guardados en **SQLite**, en un único archivo (`PARKING_DB`). | ✅ |
-| RNF-04 | Sesión de admin con una cookie firmada (HMAC) a la que no puede acceder JavaScript (`HttpOnly`). Las credenciales se pueden cambiar con `ADMIN_USER` y `ADMIN_PASSWORD`. | ✅ |
+| RNF-04 | **Sesiones del admin revocables:** token aleatorio en una cookie `HttpOnly` y `SameSite=Lax`, del que la base de datos solo guarda el hash. «Salir» invalida la sesión en el servidor, y cambiar la contraseña cierra las demás sesiones. La contraseña se guarda con *scrypt* (mínimo 10 caracteres). | ✅ |
 | RNF-05 | Tests automáticos que cubren todas las reglas anteriores, con la fecha de "hoy" fijada para probar fines de semana y festivos. | ✅ |
-| RNF-06 | Servir la app por **HTTPS** en producción. | ⬜ |
+| RNF-06 | **HTTPS** en producción. La app lo detecta detrás de un proxy (Caddy u otro): marca las cookies como `Secure` y envía HSTS. Configurada para un servidor: Caddy con certificado, y Uvicorn con `--proxy-headers` en el `Dockerfile` (ver `DEPLOY.md`). | 🟡 Configurada; falta comprobarla tras el primer despliegue |
+| RNF-07 | **Límites anti-abuso por IP:** 5 intentos de login fallidos cada 15 minutos, y 5 reservas o solicitudes por hora (`RESERVAS_POR_HORA`). Al superarlos se responde 429. | ✅ |
+| RNF-08 | **Validación de entradas:** nombres de 60 caracteres como máximo y sin caracteres de control; números de plaza entre 0 y 99999; correo del admin con formato válido. | ✅ |
+| RNF-09 | **Cabeceras de seguridad:** `Content-Security-Policy` sin scripts en línea, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel del admin. Sin documentación pública de la API (`/docs`). | ✅ |
+| RNF-10 | Los **mensajes** tras una acción, incluida la confirmación de reserva, viajan en una cookie de un solo uso y no en la URL, así que no se pueden fabricar enlaces con textos falsos. | ✅ |
+| RNF-11 | **Concurrencia:** varias reservas simultáneas no dan errores ni bloquean la base de datos. Se usa SQLite en modo WAL, con espera si está ocupada y transacción inmediata al reservar. | ✅ |
+| RNF-12 | Dependencias con **versión fijada** (`requirements.txt` y `requirements-dev.txt`). | ✅ |
 
 **Stack:** Python 3 · FastAPI · Jinja2 · SQLite. Las instrucciones de arranque están en el [README](README.md).
 
@@ -202,11 +208,11 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 |---|---|---|---|
 | P-01 | **Canal de los avisos** | El aviso solo se ve al entrar en el panel de admin. | Enviarlo además por email, Telegram o notificación del móvil, para que llegue sin abrir la app. |
 | P-02 | **Resultado de la solicitud** | Como ya no existe "Mis reservas", el usuario no ve si su solicitud para hoy se aprobó. | Que el admin se lo comunique, o mostrar el estado en la pantalla de confirmación. |
-| P-03 | **Contraseña por defecto** | El admin entra con admin / admin. | Cambiarla con `ADMIN_PASSWORD` antes de publicar la app en internet. |
+| P-03 | ~~Contraseña por defecto~~ | **Resuelto en 1.6:** la app obliga a cambiarla en el primer acceso. | — |
 | P-04 | **Hora límite** para reservar el siguiente día laborable | Se puede reservar hasta las 23:59 del día anterior. | ¿Fijar una hora de cierre (por ejemplo, las 20:00)? |
 | P-05 | **Autogestión del titular** | Solo el admin puede liberar una plaza fija. | Permitir que el titular la ceda él mismo. |
 | P-06 | **Histórico** | Las reservas pasadas se guardan, pero no se pueden consultar. | Añadir una pantalla de histórico o una exportación a CSV. |
-| P-07 | **Despliegue** | Solo se ha ejecutado en local. | Elegir alojamiento, dominio y HTTPS (ver RNF-06). |
+| P-07 | **Despliegue** | Preparado en un servidor: imagen Docker en GHCR, Caddy, copias cifradas en almacenamiento externo y CI/CD con GitHub Actions (`DEPLOY.md`). | Activar `DEPLOY_ENABLED`, hacer el primer despliegue y comprobar RNF-06. |
 | P-08 | **Festivos de 2028** | Hay festivos cargados hasta 2027. | Añadirlos en Ajustes cuando se publiquen (BOCM, octubre a diciembre de 2027). |
 
 ## 13. Historial de versiones
@@ -219,6 +225,8 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | 1.3 | 16/10/2026 | Plazas **fijas**: el admin las libera para **un único día**, que puede ser el mismo día, y al día siguiente vuelven a estar cerradas. No se pueden liberar días pasados. En la interfaz, «nominal» pasa a llamarse «fija». |
 | 1.4 | 16/10/2026 | **Numeración libre de plazas**: el admin las da de alta con su número real (sueltas o por rangos), las renumera y las elimina. Desaparece el «número total de plazas» (antes las plazas se numeraban 1..N). Edición en una sola línea por plaza: el titular determina si es fija. |
 | 1.5 | 16/10/2026 | Rediseño del **tablero del admin**: indicadores, barra de ocupación, filtros por estado y rejilla de plazas con etiqueta de estado (punto de color siempre acompañado de texto). Modo claro y oscuro. |
+| 1.6 | 16/10/2026 | **Seguridad** (tras el análisis de seguridad): corregido el bloqueo de la base de datos con reservas simultáneas; cambio obligatorio de la contraseña de fábrica; límite de intentos de login y de reservas por IP; validación de nombres; sesiones revocables; cookies `Secure` y HSTS bajo HTTPS; cabeceras de seguridad y CSP; sin `/docs`; mensajes fuera de la URL; dependencias fijadas. |
+| 1.7 | 16/10/2026 | **Despliegue**: contenedor Docker, Caddy con HTTPS, copias cifradas, CI/CD, `/health/` y versión visible al pie. La contraseña inicial del admin puede venir de un archivo secreto (`ADMIN_PASSWORD_FILE`). |
 
 ---
 

@@ -5,7 +5,7 @@
 <p class="sub">{{ fecha | fecha_larga }}</p>
 <form method="post" action="/{{ 'solicitar' if dia == 'hoy' else 'reservar' }}/{{ plaza.id }}" class="card form">
   <label>Nombre
-    <input name="nombre" value="{{ nombre }}" required autocomplete="name" autofocus>
+    <input name="nombre" value="{{ nombre }}" maxlength="{{ nombre_max }}" required autocomplete="name" autofocus>
   </label>
   {% if dia == 'hoy' %}
     <p class="hint">Es para hoy: el admin recibirá la solicitud y tendrá que aprobarla.</p>

@@ -1,5 +1,4 @@
 import os
-import secrets
 import sqlite3
 
 SCHEMA = """
@@ -49,6 +48,11 @@ CREATE TABLE IF NOT EXISTS avisos (
     leido     INTEGER NOT NULL DEFAULT 0,
     creado_en TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+-- Sesiones del admin: solo el hash del token, para poder cerrarlas desde el servidor
+CREATE TABLE IF NOT EXISTS sesiones (
+    token_hash TEXT PRIMARY KEY,
+    expira     INTEGER NOT NULL
+);
 """
 
 
@@ -57,17 +61,24 @@ def db_path() -> str:
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path())
+    # Cada petición abre su propia conexión, pero FastAPI puede crearla en un hilo y usarla
+    # en otro: sin check_same_thread=False la transacción queda a medias y bloquea la base de datos.
+    # timeout: si otra petición está escribiendo, se espera en vez de fallar.
+    conn = sqlite3.connect(db_path(), timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
 def init_db() -> None:
-    """Crea las tablas y, la primera vez, las plazas, los festivos y la clave de sesión."""
+    """Crea las tablas y, la primera vez, las plazas y los festivos."""
     from . import calendario, models
 
-    with connect() as conn:
+    conn = connect()
+    try:
+        # WAL: las lecturas no esperan a las escrituras (el modo queda guardado en el fichero)
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
         # Solo la primera vez: plazas 1..N. Después el admin las numera como quiera
         if models.get_config(conn, "plazas_creadas") is None:
@@ -79,5 +90,6 @@ def init_db() -> None:
             conn.executemany("INSERT OR IGNORE INTO festivos (fecha, nombre) VALUES (?, ?)",
                              calendario.FESTIVOS_MADRID.items())
             models.set_config(conn, "festivos_cargados", "1")
-        if models.get_config(conn, "secret") is None:
-            models.set_config(conn, "secret", secrets.token_hex(32))
+        conn.commit()
+    finally:
+        conn.close()

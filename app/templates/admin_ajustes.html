@@ -17,10 +17,10 @@
           <input class="num-input" type="number" name="numero" value="{{ p.numero }}" min="0" required aria-label="Número de plaza">
           <input class="titular {% if p.titular %}fija{% endif %}" name="titular" value="{{ p.titular or '' }}"
                  placeholder="Reservable" aria-label="Titular (vacío = reservable)"
-                 oninput="this.classList.toggle('fija', this.value.trim() !== '')">
+                 maxlength="{{ nombre_max }}" data-titular>
           <button class="btn" type="submit" aria-label="Guardar plaza {{ p.numero }}">✓</button>
           <button class="btn danger" type="submit" formaction="/admin/plazas/{{ p.id }}/borrar" formnovalidate
-                  onclick="return confirm('¿Eliminar la plaza {{ p.numero }}?')" aria-label="Eliminar plaza {{ p.numero }}">✕</button>
+                  data-confirmar="¿Eliminar la plaza {{ p.numero }}?" aria-label="Eliminar plaza {{ p.numero }}">✕</button>
         </form>
       </li>
     {% else %}
@@ -33,7 +33,7 @@
   <h2>Correo del admin</h2>
   <p class="hint">Se muestra tras reservar, para quien quiera cancelar.</p>
   <form method="post" action="/admin/email" class="inline">
-    <input type="email" name="email" value="{{ email }}" placeholder="admin@ejemplo.com">
+    <input type="email" name="email" value="{{ email }}" placeholder="admin@ejemplo.com" maxlength="254">
     <button class="btn primary" type="submit">Guardar</button>
   </form>
 </section>
@@ -42,7 +42,7 @@
   <h2>Festivos</h2>
   <p class="hint">Además de sábados y domingos. La víspera de un festivo se reserva para el siguiente día laborable.</p>
   <form method="post" action="/admin/festivos" class="inline wrap">
-    <input name="nombre" placeholder="Nombre del festivo" required>
+    <input name="nombre" placeholder="Nombre del festivo" maxlength="{{ texto_max }}" required>
     <input type="date" name="fecha" required>
     <button class="btn" type="submit">Añadir</button>
   </form>
@@ -63,4 +63,9 @@
   </ul>
 </section>
 
+<section class="card">
+  <h2>Seguridad</h2>
+  <p class="hint">Al cambiar la contraseña se cierran las sesiones abiertas en otros dispositivos.</p>
+  <a class="btn" href="/admin/password">Cambiar contraseña</a>
+</section>
 {% endblock %}

@@ -17,4 +17,8 @@ COPY --chown=10001:10001 VERSION ./VERSION
 
 USER 10001:10001
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Solo Caddy llega al contenedor (puerto publicado en 127.0.0.1): se fía de sus cabeceras
+# X-Forwarded-* para conocer la IP real (límites por IP) y que la conexión es HTTPS.
+# Un único proceso: los límites de intentos se guardan en memoria.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", \
+     "--proxy-headers", "--forwarded-allow-ips", "*", "--no-server-header"]
