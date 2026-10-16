@@ -60,6 +60,18 @@ def hacer_nominal(admin, plaza_id, titular="Luis"):
     assert "guardada" in r.text
 
 
+def test_health(client):
+    assert client.get("/health/").json() == {"status": "ok"}
+
+
+def test_admin_password_file(client, tmp_path, monkeypatch):
+    password_file = tmp_path / "admin_password"
+    password_file.write_text("clave-desde-archivo")
+    monkeypatch.setenv("ADMIN_PASSWORD_FILE", str(password_file))
+    response = client.post("/admin/login", data={"usuario": "admin", "password": "clave-desde-archivo"})
+    assert response.url.path == "/admin"
+
+
 # --- Día para el que se reserva ----------------------------------------------
 
 @pytest.mark.parametrize("hoy, esperado, etiqueta", [

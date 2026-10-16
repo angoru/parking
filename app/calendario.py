@@ -1,6 +1,7 @@
 """Días laborables: fines de semana y festivos no cuentan para reservar."""
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # Festivos de la ciudad de Madrid (nacionales, autonómicos y locales).
 # Fuentes: Decreto 75/2025 y Decreto 82/2026 de la Comunidad de Madrid (BOCM)
@@ -39,7 +40,7 @@ FESTIVOS_MADRID = {
 
 def hoy() -> date:
     """Fecha actual. Los tests la sustituyen para fijar el día."""
-    return date.today()
+    return datetime.now(ZoneInfo("Europe/Madrid")).date()
 
 
 def festivo(conn: sqlite3.Connection, d: date) -> str | None:

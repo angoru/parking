@@ -12,6 +12,8 @@ Aplicación web (pensada para el móvil) para reservar plazas de garaje.
 
 La especificación funcional completa está en [`specs.md`](specs.md).
 
+El despliegue en un servidor (GitHub Actions, GHCR, Caddy y copias cifradas) se describe en [`DEPLOY.md`](DEPLOY.md).
+
 ## Puesta en marcha
 
 ```bash

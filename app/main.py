@@ -110,11 +110,19 @@ def require_admin(request: Request, conn=Depends(get_conn)) -> None:
 
 def credenciales_correctas(usuario: str, password: str) -> bool:
     ok_usuario = secrets.compare_digest(usuario.encode(), os.environ.get("ADMIN_USER", "admin").encode())
-    ok_password = secrets.compare_digest(password.encode(), os.environ.get("ADMIN_PASSWORD", "admin").encode())
+    password_file = os.environ.get("ADMIN_PASSWORD_FILE")
+    expected_password = Path(password_file).read_text() if password_file else os.environ.get("ADMIN_PASSWORD", "admin")
+    ok_password = secrets.compare_digest(password.encode(), expected_password.encode())
     return ok_usuario and ok_password
 
 
 # --- Público ---------------------------------------------------------------
+
+@app.get("/health/", include_in_schema=False)
+def health(conn=Depends(get_conn)):
+    conn.execute("SELECT 1").fetchone()
+    return {"status": "ok"}
+
 
 @app.get("/")
 def libres(request: Request, dia: str | None = None, error: str | None = None, conn=Depends(get_conn)):
