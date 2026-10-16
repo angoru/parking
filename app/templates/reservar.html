@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Plaza {{ plaza.numero }}{% endblock %}
+{% block content %}
+<h1>Plaza {{ plaza.numero }}</h1>
+<p class="sub">{{ fecha | fecha_larga }}</p>
+<form method="post" action="/{{ 'solicitar' if dia == 'hoy' else 'reservar' }}/{{ plaza.id }}" class="card form">
+  <label>Nombre
+    <input name="nombre" value="{{ nombre }}" required autocomplete="name" autofocus>
+  </label>
+  {% if dia == 'hoy' %}
+    <p class="hint">Es para hoy: el admin recibirá la solicitud y tendrá que aprobarla.</p>
+    <button class="btn primary" type="submit">Enviar solicitud</button>
+  {% else %}
+    <button class="btn primary" type="submit">Confirmar reserva</button>
+  {% endif %}
+  <a class="btn ghost" href="/?dia={{ dia }}">Volver</a>
+</form>
+{% endblock %}

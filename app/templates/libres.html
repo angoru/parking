@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+{% if dias.hoy %}
+  <nav class="tabs">
+    <a href="/?dia=hoy" {% if dia == 'hoy' %}class="active"{% endif %}>Hoy</a>
+    <a href="/?dia=siguiente" {% if dia == 'siguiente' %}class="active"{% endif %}>{{ dias.etiqueta }}</a>
+  </nav>
+{% endif %}
+<p class="sub center">{{ fecha | fecha_larga }}</p>
+{% if dia == 'hoy' %}
+  <p class="hint">Para hoy se envía una solicitud y el admin tiene que aprobarla.</p>
+{% endif %}
+
+{% if plazas %}
+  <p class="count">{{ plazas | length }} plaza{{ "s" if plazas | length != 1 }} libre{{ "s" if plazas | length != 1 }}</p>
+  <ul class="grid">
+    {% for p in plazas %}
+      <li>
+        <a class="spot" href="/reservar/{{ p.id }}?dia={{ dia }}">
+          <span class="num">{{ p.numero }}</span>
+          <span class="action">{{ "Solicitar" if dia == 'hoy' else "Reservar" }}</span>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">No quedan plazas libres para este día.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Solicitudes{% endblock %}
+{% block content %}
+<h1>Solicitudes</h1>
+<p class="sub">Peticiones para el mismo día pendientes de aprobar.</p>
+
+{% if solicitudes %}
+  <ul class="list">
+    {% for s in solicitudes %}
+      <li class="card row">
+        <div>
+          <strong>{{ s.nombre }}</strong> · plaza {{ s.numero }}
+          <div class="sub">{{ s.fecha | fecha_larga }}</div>
+        </div>
+        <div class="acciones">
+          <form method="post" action="/admin/solicitudes/{{ s.id }}/rechazar">
+            <button class="btn danger" type="submit">Rechazar</button>
+          </form>
+          <form method="post" action="/admin/solicitudes/{{ s.id }}/aprobar">
+            <button class="btn primary" type="submit">Aprobar</button>
+          </form>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">No hay solicitudes pendientes.</p>
+{% endif %}
+{% endblock %}

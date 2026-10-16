@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Avisos{% endblock %}
+{% block content %}
+<h1>Avisos</h1>
+<p class="sub">Reservas, solicitudes y cancelaciones hechas por los usuarios.</p>
+
+{% if avisos %}
+  <ul class="list">
+    {% for a in avisos %}
+      <li class="card aviso {% if loop.index <= nuevos %}nuevo{% endif %}">
+        <div>{{ a.texto }}</div>
+        <div class="sub">{{ a.creado_en[:16] | replace("T", " ") }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">Todavía no hay avisos.</p>
+{% endif %}
+{% endblock %}

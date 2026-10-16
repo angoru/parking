@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Tablero{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+{% set q = "&ver=" ~ ver if ver != "todas" else "" %}
+
+<header class="board-head">
+  <div>
+    <p class="eyebrow">Ocupación del garaje</p>
+    <div class="date-switch">
+      <a class="icon-btn" href="/admin?fecha={{ anterior.isoformat() }}{{ q }}" aria-label="Día anterior">‹</a>
+      <form method="get" action="/admin" class="date-label">
+        <label for="fecha">{{ fecha | fecha_larga }}</label>
+        <input type="date" id="fecha" name="fecha" value="{{ fecha.isoformat() }}" onchange="this.form.submit()">
+        {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
+      </form>
+      <a class="icon-btn" href="/admin?fecha={{ siguiente.isoformat() }}{{ q }}" aria-label="Día siguiente">›</a>
+    </div>
+  </div>
+  {% if fecha != hoy %}<a class="btn sm" href="/admin{{ '?ver=' ~ ver if ver != 'todas' }}">Ir a hoy</a>{% endif %}
+</header>
+
+{% if no_laborable %}<p class="alert info">Día no laborable · {{ no_laborable }}</p>{% endif %}
+{% if pasado %}<p class="alert info">Día pasado · solo consulta</p>{% endif %}
+
+<section class="kpis" aria-label="Resumen del día">
+  <div class="kpi">
+    <span class="kpi-label"><i class="dot dot-libre"></i>Libres</span>
+    <span class="kpi-value">{{ resumen.libres }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label"><i class="dot dot-reservada"></i>Reservadas</span>
+    <span class="kpi-value">{{ resumen.reservadas }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label"><i class="dot dot-nominal"></i>Fijas en uso</span>
+    <span class="kpi-value">{{ resumen.fijas }}</span>
+  </div>
+  <a class="kpi kpi-link" href="/admin/solicitudes">
+    <span class="kpi-label"><i class="dot {{ 'dot-aviso' if pendientes else 'dot-vacio' }}"></i>Solicitudes</span>
+    <span class="kpi-value">{{ pendientes }}</span>
+    <span class="kpi-foot">{{ "pendientes de aprobar ›" if pendientes else "sin pendientes" }}</span>
+  </a>
+</section>
+
+<section class="meter-card" aria-label="Ocupación">
+  <div class="meter-text">
+    <span>Ocupación</span>
+    <strong>{{ resumen.ocupadas }} de {{ resumen.total }} · {{ resumen.pct }} %</strong>
+  </div>
+  <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="{{ resumen.total }}" aria-valuenow="{{ resumen.ocupadas }}">
+    <span style="width: {{ resumen.pct }}%"></span>
+  </div>
+</section>
+
+<nav class="filters" aria-label="Filtrar plazas">
+  {% for clave, texto in [("todas", "Todas"), ("libres", "Libres"), ("ocupadas", "Ocupadas"), ("fijas", "Fijas")] %}
+    <a href="/admin?fecha={{ fecha.isoformat() }}{{ '&ver=' ~ clave if clave != 'todas' }}"
+       class="{{ 'active' if ver == clave }}">{{ texto }}</a>
+  {% endfor %}
+</nav>
+
+<ul class="spots">
+  {% for p in plazas %}
+    <li class="spot-card {{ p.estado }}">
+      <div class="spot-top">
+        <span class="spot-num">{{ p.numero }}</span>
+        {% if p.estado == 'libre' %}
+          <span class="chip libre"><i class="dot dot-libre"></i>Libre</span>
+        {% elif p.estado == 'nominal_liberada' %}
+          <span class="chip libre"><i class="dot dot-libre"></i>Libre hoy</span>
+        {% elif p.estado == 'reservada' %}
+          <span class="chip reservada"><i class="dot dot-reservada"></i>Reservada</span>
+        {% else %}
+          <span class="chip nominal"><i class="dot dot-nominal"></i>Fija</span>
+        {% endif %}
+      </div>
+
+      <div class="spot-who">
+        {% if p.estado == 'reservada' %}
+          <strong>{{ p.reservada_por }}</strong>
+          {% if p.tipo == 'nominal' %}<span>Cedida por {{ p.titular }}</span>{% endif %}
+        {% elif p.estado == 'nominal' %}
+          <strong>{{ p.titular }}</strong><span>Titular</span>
+        {% elif p.estado == 'nominal_liberada' %}
+          <strong class="muted">Sin asignar</strong><span>Fija de {{ p.titular }}, cedida este día</span>
+        {% else %}
+          <strong class="muted">Sin asignar</strong>
+        {% endif %}
+      </div>
+
+      {% if not pasado %}
+        {% if p.estado in ('libre', 'nominal_liberada') %}
+          <details class="spot-action">
+            <summary class="btn sm">Ocupar</summary>
+            <form method="post" action="/admin/plazas/{{ p.id }}/ocupar">
+              <input type="hidden" name="fecha" value="{{ fecha.isoformat() }}">
+              {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
+              <input name="nombre" placeholder="{{ p.titular if p.estado == 'nominal_liberada' else 'Nombre' }}"
+                     {% if p.estado == 'libre' %}required{% endif %} aria-label="Nombre">
+              <button class="btn sm primary" type="submit">OK</button>
+            </form>
+          </details>
+        {% else %}
+          <form method="post" action="/admin/plazas/{{ p.id }}/liberar" class="spot-action">
+            <input type="hidden" name="fecha" value="{{ fecha.isoformat() }}">
+            {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
+            <button class="btn sm" type="submit">{{ "Liberar este día" if p.estado == 'nominal' else "Liberar" }}</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </li>
+  {% else %}
+    <li class="empty">{{ "No hay plazas configuradas." if ver == "todas" else "Ninguna plaza en este filtro." }}</li>
+  {% endfor %}
+</ul>
+{% endblock %}

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1f6feb">
+  <title>{% block title %}Plazas libres{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    {% if admin %}
+      <a class="brand" href="/admin">🅿️ Admin</a>
+      <nav>
+        <a href="/admin">Tablero</a>
+        <a href="/admin/solicitudes">Solicitudes{% if pendientes %} <span class="badge">{{ pendientes }}</span>{% endif %}</a>
+        <a href="/admin/avisos">Avisos{% if no_leidos %} <span class="badge">{{ no_leidos }}</span>{% endif %}</a>
+        <a href="/admin/ajustes">Ajustes</a>
+        <form method="post" action="/admin/logout"><button class="link" type="submit">Salir</button></form>
+      </nav>
+    {% else %}
+      <a class="brand" href="/">🅿️ Garaje</a>
+    {% endif %}
+  </header>
+  <main class="{% block main_class %}{% endblock %}">
+    {% if msg %}<p class="alert ok">{{ msg }}</p>{% endif %}
+    {% if error %}<p class="alert err">{{ error }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
