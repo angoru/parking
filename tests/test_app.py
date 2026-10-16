@@ -1,11 +1,12 @@
 import re
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import calendario
-from app.main import app
+from app.main import APP_VERSION, app
 
 # Miércoles normal: el siguiente laborable es el jueves 15
 MIERCOLES = date(2026, 10, 14)
@@ -62,6 +63,14 @@ def hacer_nominal(admin, plaza_id, titular="Luis"):
 
 def test_health(client):
     assert client.get("/health/").json() == {"status": "ok"}
+
+
+def test_version_visible(client, admin):
+    assert APP_VERSION == Path("VERSION").read_text().strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", APP_VERSION)
+    assert app.version == APP_VERSION
+    assert f"Versión v{APP_VERSION}" in client.get("/").text
+    assert f"Versión v{APP_VERSION}" in admin.get("/admin").text
 
 
 def test_admin_password_file(client, tmp_path, monkeypatch):

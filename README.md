@@ -14,6 +14,10 @@ La especificación funcional completa está en [`specs.md`](specs.md).
 
 El despliegue en un servidor (GitHub Actions, GHCR, Caddy y copias cifradas) se describe en [`DEPLOY.md`](DEPLOY.md).
 
+## Versiones
+
+La versión actual está en [`VERSION`](VERSION) y aparece al pie de todas las páginas. Para publicar una nueva versión, actualiza ese archivo siguiendo `mayor.menor.parche` y crea la etiqueta Git `v<versión>` sobre el commit desplegado. FastAPI usa el mismo número en `/openapi.json`.
+
 ## Puesta en marcha
 
 ```bash

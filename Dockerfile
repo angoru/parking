@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 10001 --gid parking --no-create-home parking
 
 COPY --chown=10001:10001 app ./app
+COPY --chown=10001:10001 VERSION ./VERSION
 
 USER 10001:10001
 EXPOSE 8000

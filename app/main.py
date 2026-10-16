@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from . import calendario, db, models
 
 BASE_DIR = Path(__file__).parent
+APP_VERSION = (BASE_DIR.parent / "VERSION").read_text(encoding="utf-8").strip()
 NOMBRE_COOKIE = "parking_nombre"
 SESION_COOKIE = "parking_admin"
 SESION_DURACION = 30 * 24 * 3600
@@ -30,9 +31,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Plazas de garaje", lifespan=lifespan)
+app = FastAPI(title="Plazas de garaje", version=APP_VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates.env.globals["app_version"] = APP_VERSION
 
 
 def fecha_larga(d: date | str) -> str:
