@@ -12,12 +12,15 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from app import calendario, seguridad
+from app import calendario, db, seguridad
 from app.main import app
 
 RAIZ = Path(__file__).resolve().parent.parent
 CLAVE = "clave-de-prueba-123"
 MIERCOLES = date(2026, 10, 14)
+# Fecha que llevan los formularios de reserva (siguiente laborable) y de solicitud (hoy)
+JUEVES = "2026-10-15"
+HOY = MIERCOLES.isoformat()
 
 
 @pytest.fixture
@@ -109,15 +112,32 @@ def test_reservas_simultaneas_sin_errores_ni_bloqueos(servidor):
     seguridad.limitador.reset()
     with ThreadPoolExecutor(10) as pool:
         respuestas = list(pool.map(
-            lambda i: httpx.post(f"{servidor}/reservar/1", data={"nombre": f"Persona {i}"}, timeout=30),
+            lambda i: httpx.post(f"{servidor}/reservar/1", data={"nombre": f"Persona {i}", "fecha": JUEVES}, timeout=30),
             range(10)))
     assert [r.status_code for r in respuestas] == [303] * 10
     assert sum(r.headers["location"] == "/confirmacion" for r in respuestas) == 1
     # La base de datos no se queda bloqueada: la siguiente reserva entra al momento
     inicio = time.monotonic()
-    r = httpx.post(f"{servidor}/reservar/2", data={"nombre": "Después"}, timeout=30)
+    r = httpx.post(f"{servidor}/reservar/2", data={"nombre": "Después", "fecha": JUEVES}, timeout=30)
     assert r.headers["location"] == "/confirmacion"
     assert time.monotonic() - inicio < 2
+
+
+def test_aprobar_a_la_vez_no_rechaza_la_aprobada(servidor, entorno):
+    # Doble toque en «Aprobar»: la segunda petición no puede marcarla como rechazada
+    entorno.setenv("ADMIN_PASSWORD", CLAVE)
+    with httpx.Client(base_url=servidor, timeout=30) as c:
+        c.post("/admin/login", data={"usuario": "admin", "password": CLAVE})
+        c.post("/solicitar/1", data={"nombre": "Raúl", "fecha": HOY})
+        sid = re.search(r"/admin/solicitudes/(\d+)/aprobar", c.get("/admin/solicitudes").text).group(1)
+        with ThreadPoolExecutor(5) as pool:
+            list(pool.map(lambda _: c.post(f"/admin/solicitudes/{sid}/aprobar"), range(5)))
+    conn = db.connect()
+    try:
+        assert conn.execute("SELECT estado FROM solicitudes").fetchone()[0] == "aprobada"
+        assert conn.execute("SELECT COUNT(*) FROM reservas").fetchone()[0] == 1
+    finally:
+        conn.close()
 
 
 # --- 3. Intentos de login ----------------------------------------------------------
@@ -144,25 +164,57 @@ def test_login_correcto_reinicia_el_contador(entorno):
 # --- 4. Abuso de reservas anónimas ---------------------------------------------------
 
 def test_nombre_demasiado_largo(client):
-    r = client.post("/reservar/1", data={"nombre": "A" * 61})
+    r = client.post("/reservar/1", data={"nombre": "A" * 61, "fecha": JUEVES})
     assert "demasiado largo" in r.text
-    assert "Has reservado" in client.post("/reservar/1", data={"nombre": "A" * 60}).text
+    assert "Has reservado" in client.post("/reservar/1", data={"nombre": "A" * 60, "fecha": JUEVES}).text
 
 
 def test_nombre_sin_caracteres_de_control(client, entorno):
     entorno.setenv("ADMIN_PASSWORD", CLAVE)
-    client.post("/reservar/1", data={"nombre": "  Ana\x00\x1b[31m   López \n"})
+    client.post("/reservar/1", data={"nombre": "  Ana\x00\x1b[31m   López \n", "fecha": JUEVES})
     login(client, CLAVE)
     html = client.get("/admin", params={"fecha": "2026-10-15"}).text
     assert "Ana[31m López" in html and "\x1b" not in html
 
 
-def test_limite_de_reservas_por_ip(client):
+def _enviar(c, i, nombre):
+    if i % 2:
+        return c.post(f"/reservar/{i}", data={"nombre": nombre, "fecha": JUEVES})
+    return c.post(f"/solicitar/{i}", data={"nombre": nombre, "fecha": HOY})
+
+
+def test_limite_de_reservas_por_dispositivo(client):
+    client.get("/")  # el navegador recibe su cookie de dispositivo
+    assert client.cookies.get("parking_dispositivo")
     for i in range(1, 6):
-        assert "Has" in client.post(f"/reservar/{i}" if i % 2 else f"/solicitar/{i}", data={"nombre": f"P{i}"}).text
-    client.post("/admin/plazas", data={"numeros": "6"})  # sin sesión: no hace nada
-    r = client.post("/solicitar/1", data={"nombre": "Otra"})
+        assert "Has" in _enviar(client, i, f"P{i}").text
+    r = client.post("/solicitar/1", data={"nombre": "Otra", "fecha": HOY})
     assert r.status_code == 429 and "Demasiadas reservas" in r.text
+
+
+def test_oficina_con_la_misma_ip_no_se_bloquea(entorno):
+    # Seis personas en la misma wifi (misma IP): cada una con su dispositivo puede reservar
+    with TestClient(app) as primero:
+        primero.get("/")
+        primero.post("/admin/login", data={"usuario": "admin", "password": "admin"})
+        primero.post("/admin/password", data={"actual": "admin", "nueva": CLAVE, "repetir": CLAVE})
+        primero.post("/admin/plazas", data={"numeros": "6-12"})
+        for i in range(1, 6):
+            assert "Has" in _enviar(primero, i, f"P{i}").text
+    for i in range(6, 12):
+        with TestClient(app) as c:
+            c.get("/")
+            assert "Has" in c.post(f"/reservar/{i}", data={"nombre": f"Q{i}", "fecha": JUEVES}).text
+
+
+def test_limite_por_ip_para_scripts_sin_cookies(entorno):
+    entorno.setenv("RESERVAS_POR_HORA_IP", "3")
+    with TestClient(app) as c:
+        for i in range(1, 4):
+            c.cookies.clear()
+            assert "Has" in c.post(f"/reservar/{i}", data={"nombre": f"S{i}", "fecha": JUEVES}).text
+        c.cookies.clear()
+        assert c.post("/reservar/4", data={"nombre": "S4", "fecha": JUEVES}).status_code == 429
 
 
 # --- 5. HTTPS: cookies seguras cuando la conexión lo es --------------------------------
@@ -257,9 +309,9 @@ def test_confirmacion_no_se_puede_falsificar(client):
 
 
 def test_mensajes_siguen_funcionando(client):
-    r = client.post("/reservar/1", data={"nombre": "Ana"})
+    r = client.post("/reservar/1", data={"nombre": "Ana", "fecha": JUEVES})
     assert "Has reservado la plaza 1" in r.text
-    assert "ya está ocupada" in client.post("/reservar/1", data={"nombre": "Pepe"}).text
+    assert "ya está ocupada" in client.post("/reservar/1", data={"nombre": "Pepe", "fecha": JUEVES}).text
     # El mensaje se muestra una sola vez
     assert "ya está ocupada" not in client.get("/").text
 

@@ -1,5 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
+{% if mias %}
+  <section class="card mias">
+    <h2>En este dispositivo</h2>
+    <ul>
+      {% for m in mias %}
+        <li class="mia {{ m.estado }}">
+          {% if m.estado == 'anulada' %}
+            <span>Tu {{ m.tipo }}{% if m.numero %} de la plaza <strong>{{ m.numero }}</strong>{% endif %}
+              para {{ (m.fecha | fecha_larga) | lower }} ya no está activa.</span>
+            <span class="tag no">Anulada</span>
+          {% else %}
+            <span>{{ "Solicitud de la plaza" if m.tipo == 'solicitud' else "Plaza" }} <strong>{{ m.numero }}</strong>
+              · {{ m.fecha | fecha_larga }}{% if m.motivo %}<br><small>{{ m.motivo }}</small>{% endif %}</span>
+            {% set etiqueta = {"reservada": ("ok", "Reservada"), "aprobada": ("ok", "Aprobada"),
+                               "pendiente": ("wait", "Pendiente"), "rechazada": ("no", "Rechazada")}[m.estado] %}
+            <span class="tag {{ etiqueta[0] }}">{{ etiqueta[1] }}</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
 {% if dias.hoy %}
   <nav class="tabs">
     <a href="/?dia=hoy" {% if dia == 'hoy' %}class="active"{% endif %}>Hoy</a>

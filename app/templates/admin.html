@@ -105,7 +105,12 @@
           <form method="post" action="/admin/plazas/{{ p.id }}/liberar" class="spot-action">
             <input type="hidden" name="fecha" value="{{ fecha.isoformat() }}">
             {% if ver != "todas" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
-            <button class="btn sm" type="submit">{{ "Liberar este día" if p.estado == 'nominal' else "Liberar" }}</button>
+            {% if p.estado == 'nominal' %}
+              <button class="btn sm" type="submit">Liberar este día</button>
+            {% else %}
+              <button class="btn sm" type="submit"
+                      data-confirmar="¿Anular la reserva de {{ p.reservada_por }} en la plaza {{ p.numero }}? No se puede deshacer.">Liberar</button>
+            {% endif %}
           </form>
         {% endif %}
       {% endif %}

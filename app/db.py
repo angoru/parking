@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import unicodedata
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS reservas (
     fecha     TEXT NOT NULL,
     nombre    TEXT NOT NULL,
     creada_en TEXT NOT NULL DEFAULT (datetime('now')),
+    token     TEXT,  -- identifica la reserva en el dispositivo de quien la hizo
     UNIQUE (plaza_id, fecha)
 );
 -- Días en que una plaza nominal queda libre para cualquiera
@@ -34,7 +36,8 @@ CREATE TABLE IF NOT EXISTS solicitudes (
     nombre    TEXT NOT NULL,
     estado    TEXT NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'aprobada', 'rechazada')),
     motivo    TEXT,
-    creada_en TEXT NOT NULL DEFAULT (datetime('now'))
+    creada_en TEXT NOT NULL DEFAULT (datetime('now')),
+    token     TEXT  -- al aprobarla, la reserva hereda el mismo token
 );
 -- Días no laborables, además de sábados y domingos
 CREATE TABLE IF NOT EXISTS festivos (
@@ -56,6 +59,18 @@ CREATE TABLE IF NOT EXISTS sesiones (
 """
 
 
+# Columnas añadidas después de la primera versión: se crean en las bases de datos existentes
+COLUMNAS_NUEVAS = [("reservas", "token", "TEXT"), ("solicitudes", "token", "TEXT")]
+
+
+def normalizar(texto: str | None) -> str | None:
+    """Forma de comparar nombres: sin mayúsculas ni tildes («ÁLVARO» = «alvaro»)."""
+    if texto is None:
+        return None
+    sin_tildes = "".join(c for c in unicodedata.normalize("NFKD", texto) if not unicodedata.combining(c))
+    return sin_tildes.casefold()
+
+
 def db_path() -> str:
     return os.environ.get("PARKING_DB", "parking.db")
 
@@ -68,6 +83,7 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
+    conn.create_function("normalizar", 1, normalizar, deterministic=True)
     return conn
 
 
@@ -80,10 +96,17 @@ def init_db() -> None:
         # WAL: las lecturas no esperan a las escrituras (el modo queda guardado en el fichero)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
-        # Solo la primera vez: plazas 1..N. Después el admin las numera como quiera
+        for tabla, columna, tipo in COLUMNAS_NUEVAS:
+            if columna not in {c["name"] for c in conn.execute(f"PRAGMA table_info({tabla})")}:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+        conn.execute("CREATE INDEX IF NOT EXISTS reservas_token ON reservas(token)")
+        conn.execute("CREATE INDEX IF NOT EXISTS solicitudes_token ON solicitudes(token)")
+        # Solo la primera vez: plazas 1..N (con PARKING_TOTAL=0, ninguna). Después el admin
+        # las numera como quiera
         if models.get_config(conn, "plazas_creadas") is None:
-            if models.contar_plazas(conn) == 0:
-                models.crear_plazas(conn, f"1-{int(os.environ.get('PARKING_TOTAL', '10'))}")
+            total = int(os.environ.get("PARKING_TOTAL", "10"))
+            if total > 0 and models.contar_plazas(conn) == 0:
+                models.crear_plazas(conn, f"1-{total}")
             models.set_config(conn, "plazas_creadas", "1")
         # Solo se cargan una vez, para no recuperar los que el admin haya borrado
         if models.get_config(conn, "festivos_cargados") is None:

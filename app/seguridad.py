@@ -117,7 +117,7 @@ def cerrar_otras_sesiones(conn: sqlite3.Connection, token_actual: str | None) ->
     conn.execute("DELETE FROM sesiones WHERE token_hash != ?", (_hash_token(token_actual or ""),))
 
 
-# --- Límite de intentos por IP (en memoria) --------------------------------------------
+# --- Límite de intentos por IP o dispositivo (en memoria) --------------------------------------------
 
 class Limitador:
     """Ventana deslizante por clave. Se reinicia al reiniciar el servidor, lo que basta
@@ -159,7 +159,14 @@ RESERVAS_VENTANA = 3600
 
 
 def reservas_por_hora() -> int:
+    """Por dispositivo (cookie propia)."""
     return int(os.environ.get("RESERVAS_POR_HORA", "5"))
+
+
+def reservas_por_hora_ip() -> int:
+    """Por IP: más alto, porque en una oficina todos salen a internet por la misma IP.
+    Frena los scripts que no guardan cookies."""
+    return int(os.environ.get("RESERVAS_POR_HORA_IP", "60"))
 
 
 # --- Mensajes de un solo uso ------------------------------------------------------------

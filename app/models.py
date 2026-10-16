@@ -1,8 +1,9 @@
+import secrets
 import sqlite3
 import unicodedata
 from datetime import date
 
-from . import calendario
+from . import calendario, db
 
 NOMBRE_MAX = 60
 NUMERO_MAX = 99999
@@ -107,6 +108,9 @@ def update_plaza(conn: sqlite3.Connection, plaza_id: int, numero: int, tipo: str
         "SELECT 1 FROM plazas WHERE numero = ? AND id != ?", (numero, plaza_id)
     ).fetchone():
         return f"Ya existe la plaza {numero}."
+    if numero != plaza["numero"] and _reservas_futuras(conn, plaza_id):
+        # Quien la reservó como «la 23» iría a otra plaza
+        return f"La plaza {plaza['numero']} tiene reservas futuras; no se puede cambiar su número hasta que pasen o se liberen."
     if tipo not in ("nominal", "reservable"):
         return "Tipo de plaza no válido."
     titular = limpiar_texto(titular) or None
@@ -179,15 +183,19 @@ def estado_plazas(conn: sqlite3.Connection, fecha: date) -> list[dict]:
     return resultado
 
 
+def estado_plaza(conn: sqlite3.Connection, plaza_id: int, fecha: date) -> dict | None:
+    return next((p for p in estado_plazas(conn, fecha) if p["id"] == plaza_id), None)
+
+
 # --- Reservas ----------------------------------------------------------------
 
 def _nombre_ocupado(conn: sqlite3.Connection, nombre: str, fecha: date, excluir_solicitud: int | None = None) -> bool:
     """¿Tiene ya ese nombre una reserva o una solicitud pendiente ese día?"""
     params = {"nombre": nombre, "fecha": fecha.isoformat(), "excluir": excluir_solicitud or 0}
     return conn.execute(
-        """SELECT 1 FROM reservas WHERE lower(nombre) = lower(:nombre) AND fecha = :fecha
+        """SELECT 1 FROM reservas WHERE normalizar(nombre) = normalizar(:nombre) AND fecha = :fecha
            UNION ALL
-           SELECT 1 FROM solicitudes WHERE lower(nombre) = lower(:nombre) AND fecha = :fecha
+           SELECT 1 FROM solicitudes WHERE normalizar(nombre) = normalizar(:nombre) AND fecha = :fecha
                   AND estado = 'pendiente' AND id != :excluir""",
         params,
     ).fetchone() is not None
@@ -195,7 +203,7 @@ def _nombre_ocupado(conn: sqlite3.Connection, nombre: str, fecha: date, excluir_
 
 def reservar(
     conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str,
-    comprobar_nombre: bool = True, excluir_solicitud: int | None = None,
+    comprobar_nombre: bool = True, excluir_solicitud: int | None = None, token: str | None = None,
 ) -> str | None:
     """Crea una reserva. Las reglas de qué día se puede reservar se aplican en las rutas."""
     nombre, error = validar_nombre(nombre)
@@ -213,33 +221,65 @@ def reservar(
         return f"{nombre} ya tiene una plaza o una solicitud ese día."
     try:
         conn.execute(
-            "INSERT INTO reservas (plaza_id, fecha, nombre) VALUES (?, ?, ?)",
-            (plaza_id, fecha.isoformat(), nombre),
+            "INSERT INTO reservas (plaza_id, fecha, nombre, token) VALUES (?, ?, ?, ?)",
+            (plaza_id, fecha.isoformat(), nombre, token),
         )
     except sqlite3.IntegrityError:
         return f"La plaza {plaza['numero']} ya está ocupada ese día."
     return None
 
 
-# --- Solicitudes para el mismo día -------------------------------------------
+def _nuevo_token() -> str:
+    return secrets.token_urlsafe(16)
 
-def solicitar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) -> str | None:
+
+def _repetida(conn: sqlite3.Connection, tabla: str, plaza_id: int, fecha: date, nombre: str) -> sqlite3.Row | None:
+    """La misma persona ya tiene esa misma plaza ese día (por ejemplo, tras pulsar dos veces)."""
+    extra = " AND estado = 'pendiente'" if tabla == "solicitudes" else ""
+    return conn.execute(
+        f"""SELECT token FROM {tabla} WHERE plaza_id = ? AND fecha = ?
+            AND normalizar(nombre) = normalizar(?){extra}""",
+        (plaza_id, fecha.isoformat(), nombre),
+    ).fetchone()
+
+
+def reservar_usuario(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) -> tuple[str | None, str | None, bool]:
+    """Reserva desde la página pública. Devuelve (error, token, nueva). Si esa persona ya tenía
+    esa plaza ese día, no es un error: se devuelve su reserva con nueva=False."""
     nombre, error = validar_nombre(nombre)
     if error:
-        return error
+        return error, None, False
+    _bloquear_escritura(conn)
+    if previa := _repetida(conn, "reservas", plaza_id, fecha, nombre):
+        return None, previa["token"], False
+    token = _nuevo_token()
+    error = reservar(conn, plaza_id, fecha, nombre, token=token)
+    return error, None if error else token, not error
+
+
+# --- Solicitudes para el mismo día -------------------------------------------
+
+def solicitar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) -> tuple[str | None, str | None, bool]:
+    """Igual que reservar_usuario: devuelve (error, token, nueva)."""
+    nombre, error = validar_nombre(nombre)
+    if error:
+        return error, None, False
     _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
-        return "La plaza no existe."
+        return "La plaza no existe.", None, False
+    if previa := _repetida(conn, "solicitudes", plaza_id, fecha, nombre):
+        return None, previa["token"], False
     if not esta_libre(conn, plaza_id, fecha):
-        return f"La plaza {plaza['numero']} ya está ocupada ese día."
+        return f"La plaza {plaza['numero']} ya está ocupada ese día.", None, False
     if _nombre_ocupado(conn, nombre, fecha):
-        return f"{nombre} ya tiene una plaza o una solicitud ese día."
+        return f"{nombre} ya tiene una plaza o una solicitud ese día.", None, False
+    token = _nuevo_token()
     conn.execute(
-        "INSERT INTO solicitudes (plaza_id, fecha, nombre) VALUES (?, ?, ?)",
-        (plaza_id, fecha.isoformat(), nombre),
+        "INSERT INTO solicitudes (plaza_id, fecha, nombre, token) VALUES (?, ?, ?, ?)",
+        (plaza_id, fecha.isoformat(), nombre, token),
     )
-    return None
+    return None, token, True
 
 
 def solicitudes_pendientes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -264,16 +304,18 @@ def _get_pendiente(conn: sqlite3.Connection, solicitud_id: int) -> sqlite3.Row |
 
 def aprobar(conn: sqlite3.Connection, solicitud_id: int) -> str | None:
     """Convierte la solicitud en reserva. Si ya no es posible, la rechaza y devuelve el motivo."""
+    # Se bloquea antes de leer: si se pulsa «Aprobar» dos veces, la segunda ve que ya no está pendiente
+    _bloquear_escritura(conn)
     s = _get_pendiente(conn, solicitud_id)
     if s is None:
         return "La solicitud ya no está pendiente."
     error = reservar(conn, s["plaza_id"], date.fromisoformat(s["fecha"]), s["nombre"],
-                     excluir_solicitud=solicitud_id)
+                     excluir_solicitud=solicitud_id, token=s["token"])
     if error:
-        conn.execute("UPDATE solicitudes SET estado = 'rechazada', motivo = ? WHERE id = ?",
+        conn.execute("UPDATE solicitudes SET estado = 'rechazada', motivo = ? WHERE id = ? AND estado = 'pendiente'",
                      (error, solicitud_id))
         return f"No se pudo aprobar: {error} La solicitud se ha rechazado."
-    conn.execute("UPDATE solicitudes SET estado = 'aprobada' WHERE id = ?", (solicitud_id,))
+    conn.execute("UPDATE solicitudes SET estado = 'aprobada' WHERE id = ? AND estado = 'pendiente'", (solicitud_id,))
     return None
 
 
@@ -290,6 +332,7 @@ def rechazar(conn: sqlite3.Connection, solicitud_id: int) -> bool:
 def liberar(conn: sqlite3.Connection, plaza_id: int, fecha: date) -> str | None:
     """Deja libre la plaza solo ese día: anula su reserva y, si es fija, la cede para esa fecha.
     Al día siguiente la plaza fija vuelve a estar cerrada sin hacer nada."""
+    _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
@@ -309,22 +352,55 @@ def liberar(conn: sqlite3.Connection, plaza_id: int, fecha: date) -> str | None:
 def ocupar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) -> str | None:
     """Ocupa una plaza ese día. En una nominal liberada, sin nombre (o con el del titular)
     se devuelve al titular; con otro nombre se reserva para esa persona."""
+    _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
     nombre = limpiar_texto(nombre)
     if plaza["tipo"] == "nominal" and esta_libre(conn, plaza_id, fecha) and (
-        not nombre or nombre.lower() == plaza["titular"].lower()
+        not nombre or db.normalizar(nombre) == db.normalizar(plaza["titular"])
     ):
         conn.execute("DELETE FROM liberaciones WHERE plaza_id = ? AND fecha = ?", (plaza_id, fecha.isoformat()))
         return None
     return reservar(conn, plaza_id, fecha, nombre, comprobar_nombre=False)
 
 
+# --- Lo reservado desde un dispositivo -------------------------------------------
+
+def mis_reservas(conn: sqlite3.Connection, entradas: list[tuple[str, str, str]]) -> list[dict]:
+    """Estado actual de las reservas y solicitudes hechas desde un dispositivo.
+    entradas: (tipo 'r' o 's', fecha, token). El token no se puede adivinar."""
+    resultado = []
+    for tipo, fecha, token in entradas:
+        reserva = conn.execute(
+            """SELECT r.fecha, p.numero FROM reservas r JOIN plazas p ON p.id = r.plaza_id
+               WHERE r.token = ?""", (token,)).fetchone()
+        if tipo == "s":
+            s = conn.execute(
+                """SELECT s.fecha, s.estado, s.motivo, p.numero FROM solicitudes s
+                   JOIN plazas p ON p.id = s.plaza_id WHERE s.token = ?""", (token,)).fetchone()
+            if s is None:
+                continue
+            estado = s["estado"]
+            if estado == "aprobada" and reserva is None:
+                estado = "anulada"
+            resultado.append({"tipo": "solicitud", "fecha": s["fecha"], "numero": s["numero"],
+                              "estado": estado, "motivo": s["motivo"]})
+        elif reserva:
+            resultado.append({"tipo": "reserva", "fecha": reserva["fecha"], "numero": reserva["numero"],
+                              "estado": "reservada", "motivo": None})
+        else:
+            # El admin la anuló: ya no queda nada en la base de datos salvo que existió
+            resultado.append({"tipo": "reserva", "fecha": fecha, "numero": None,
+                              "estado": "anulada", "motivo": None})
+    return resultado
+
+
 # --- Avisos al admin -----------------------------------------------------------
 
-def avisar(conn: sqlite3.Connection, texto: str) -> None:
-    conn.execute("INSERT INTO avisos (texto) VALUES (?)", (texto,))
+def avisar(conn: sqlite3.Connection, texto: str, leido: bool = False) -> None:
+    """Aviso al admin. Con leido=True queda solo como historial (lo que hace el propio admin)."""
+    conn.execute("INSERT INTO avisos (texto, leido) VALUES (?, ?)", (texto, int(leido)))
 
 
 def avisos_recientes(conn: sqlite3.Connection, limite: int = 50) -> list[sqlite3.Row]:
@@ -356,6 +432,18 @@ def add_festivo(conn: sqlite3.Connection, fecha: date, nombre: str) -> str | Non
         (fecha.isoformat(), nombre),
     )
     return None
+
+
+def reservas_del_dia(conn: sqlite3.Connection, fecha: date) -> int:
+    return conn.execute("SELECT COUNT(*) FROM reservas WHERE fecha = ?", (fecha.isoformat(),)).fetchone()[0]
+
+
+def faltan_festivos(conn: sqlite3.Connection) -> list[int]:
+    """Años sin ningún festivo cargado: el actual y, desde noviembre, el siguiente."""
+    hoy = calendario.hoy()
+    anios = [hoy.year] + ([hoy.year + 1] if hoy.month >= 11 else [])
+    return [a for a in anios
+            if not conn.execute("SELECT 1 FROM festivos WHERE fecha LIKE ?", (f"{a}-%",)).fetchone()]
 
 
 def delete_festivo(conn: sqlite3.Connection, fecha: str) -> bool:

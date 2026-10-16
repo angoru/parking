@@ -1,5 +1,6 @@
 import os
 import re
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +17,12 @@ BASE_DIR = Path(__file__).parent
 APP_VERSION = (BASE_DIR.parent / "VERSION").read_text(encoding="utf-8").strip()
 NOMBRE_COOKIE = "parking_nombre"
 SESION_COOKIE = "parking_admin"
+# Identificador aleatorio del dispositivo, para el límite de reservas por hora
+DISPOSITIVO_COOKIE = "parking_dispositivo"
+# Reservas y solicitudes hechas desde este dispositivo: «r|s.fecha.token,...»
+MIAS_COOKIE = "parking_mias"
+MIAS_MAX = 10
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
 DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
@@ -98,6 +105,34 @@ def ip_cliente(request: Request) -> str:
     return request.client.host if request.client else "desconocida"
 
 
+def dispositivo(request: Request) -> str | None:
+    valor = request.cookies.get(DISPOSITIVO_COOKIE, "")
+    return valor if TOKEN_RE.fullmatch(valor) else None
+
+
+def recordar_dispositivo(request: Request, resp):
+    if dispositivo(request) is None:
+        resp.set_cookie(DISPOSITIVO_COOKIE, secrets.token_urlsafe(16), max_age=2 * 365 * 24 * 3600,
+                        httponly=True, samesite="lax", secure=cookie_segura(request))
+    return resp
+
+
+def leer_mias(request: Request) -> list[tuple[str, str, str]]:
+    """Entradas de la cookie de este dispositivo que siguen vigentes (de hoy en adelante)."""
+    hoy = calendario.hoy().isoformat()
+    entradas = []
+    for parte in request.cookies.get(MIAS_COOKIE, "").split(","):
+        tipo, _, resto = parte.partition(".")
+        fecha, _, token = resto.partition(".")
+        try:
+            vigente = date.fromisoformat(fecha).isoformat() >= hoy
+        except ValueError:
+            continue
+        if tipo in ("r", "s") and vigente and TOKEN_RE.fullmatch(token):
+            entradas.append((tipo, fecha, token))
+    return entradas[-MIAS_MAX:]
+
+
 # --- Respuestas: los mensajes van en una cookie de un solo uso, nunca en la URL ----------
 
 def redirect(path: str, msg: str | None = None, error: str | None = None, conf: dict | None = None,
@@ -175,12 +210,13 @@ def health(conn=Depends(get_conn)):
 @app.get("/")
 def libres(request: Request, dia: str | None = None, conn=Depends(get_conn)):
     dia, fecha, dias = elegir_dia(conn, dia)
-    return render(request, "libres.html", {
+    return recordar_dispositivo(request, render(request, "libres.html", {
         "dia": dia,
         "fecha": fecha,
         "dias": dias,
         "plazas": models.plazas_libres(conn, fecha),
-    })
+        "mias": models.mis_reservas(conn, leer_mias(request)),
+    }))
 
 
 @app.get("/reservar/{plaza_id}")
@@ -189,19 +225,27 @@ def reservar_form(request: Request, plaza_id: int, dia: str | None = None, conn=
     plaza = models.get_plaza(conn, plaza_id)
     if plaza is None or not models.esta_libre(conn, plaza_id, fecha):
         return redirect("/", dia=dia, error="Esta plaza ya no está libre.")
-    return render(request, "reservar.html", {
+    return recordar_dispositivo(request, render(request, "reservar.html", {
         "plaza": plaza,
         "dia": dia,
         "fecha": fecha,
         "nombre": unquote(request.cookies.get(NOMBRE_COOKIE, "")),
         "nombre_max": models.NOMBRE_MAX,
-    })
+    }))
+
+
+def claves_limite(request: Request) -> list[tuple[str, int]]:
+    """Límites de reservas por hora: por dispositivo y, más alto, por IP."""
+    claves = [(f"reserva-ip:{ip_cliente(request)}", seguridad.reservas_por_hora_ip())]
+    if disp := dispositivo(request):
+        claves.append((f"reserva-disp:{disp}", seguridad.reservas_por_hora()))
+    return claves
 
 
 def demasiadas_reservas(request: Request):
     """Frena los scripts que reservan muchas plazas con nombres inventados."""
-    if seguridad.limitador.excedido(f"reserva:{ip_cliente(request)}", seguridad.reservas_por_hora(),
-                                    seguridad.RESERVAS_VENTANA):
+    if any(seguridad.limitador.excedido(clave, maximo, seguridad.RESERVAS_VENTANA)
+           for clave, maximo in claves_limite(request)):
         return render(request, "aviso.html", {
             "titulo": "Demasiadas reservas",
             "texto": "Demasiadas reservas desde este dispositivo en la última hora. Inténtalo más tarde "
@@ -210,42 +254,62 @@ def demasiadas_reservas(request: Request):
     return None
 
 
-def confirmar(request: Request, tipo: str, plaza, fecha: date, nombre: str) -> RedirectResponse:
-    seguridad.limitador.anotar(f"reserva:{ip_cliente(request)}")
+def confirmar(request: Request, tipo: str, plaza, fecha: date, nombre: str, token: str,
+              nueva: bool) -> RedirectResponse:
+    # Pulsar dos veces no cuenta dos veces para el límite
+    if nueva:
+        for clave, _ in claves_limite(request):
+            seguridad.limitador.anotar(clave)
     resp = redirect("/confirmacion", conf={"tipo": tipo, "plaza": plaza["numero"], "fecha": fecha.isoformat()})
     resp.set_cookie(NOMBRE_COOKIE, quote(models.limpiar_texto(nombre)), max_age=365 * 24 * 3600,
                     samesite="lax", secure=cookie_segura(request))
+    entrada = (tipo[0], fecha.isoformat(), token)
+    mias = [e for e in leer_mias(request) if e != entrada] + [entrada]
+    resp.set_cookie(MIAS_COOKIE, ",".join(".".join(e) for e in mias[-MIAS_MAX:]), max_age=30 * 24 * 3600,
+                    httponly=True, samesite="lax", secure=cookie_segura(request))
     return resp
 
 
+DIA_CAMBIADO = "El día ha cambiado desde que abriste la plaza: vuelve a elegirla."
+
+
 @app.post("/reservar/{plaza_id}")
-def reservar(request: Request, plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+def reservar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: str = Form(""),
+             conn=Depends(get_conn)):
     if bloqueo := demasiadas_reservas(request):
         return bloqueo
-    fecha = dias_usuario(conn)["siguiente"]
-    error = models.reservar(conn, plaza_id, fecha, nombre)
+    dia = dias_usuario(conn)["siguiente"]
+    # El formulario dice para qué día era: si ha pasado la medianoche, no se reserva otro día sin avisar
+    if fecha != dia.isoformat():
+        return redirect("/", error=DIA_CAMBIADO)
+    error, token, nueva = models.reservar_usuario(conn, plaza_id, dia, nombre)
     if error:
         return redirect("/", error=error)
     plaza = models.get_plaza(conn, plaza_id)
     nombre = models.limpiar_texto(nombre)
-    models.avisar(conn, f"{nombre} ha reservado la plaza {plaza['numero']} para {fecha_larga(fecha).lower()}.")
-    return confirmar(request, "reserva", plaza, fecha, nombre)
+    if nueva:
+        models.avisar(conn, f"{nombre} ha reservado la plaza {plaza['numero']} para {fecha_larga(dia).lower()}.")
+    return confirmar(request, "reserva", plaza, dia, nombre, token, nueva)
 
 
 @app.post("/solicitar/{plaza_id}")
-def solicitar(request: Request, plaza_id: int, nombre: str = Form(...), conn=Depends(get_conn)):
+def solicitar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: str = Form(""),
+              conn=Depends(get_conn)):
     if bloqueo := demasiadas_reservas(request):
         return bloqueo
-    fecha = dias_usuario(conn)["hoy"]
-    if fecha is None:
+    dia = dias_usuario(conn)["hoy"]
+    if dia is None:
         return redirect("/", error="Hoy no es laborable: no se pueden pedir plazas para hoy.")
-    error = models.solicitar(conn, plaza_id, fecha, nombre)
+    if fecha != dia.isoformat():
+        return redirect("/", error=DIA_CAMBIADO)
+    error, token, nueva = models.solicitar(conn, plaza_id, dia, nombre)
     if error:
         return redirect("/", dia="hoy", error=error)
     plaza = models.get_plaza(conn, plaza_id)
     nombre = models.limpiar_texto(nombre)
-    models.avisar(conn, f"{nombre} solicita la plaza {plaza['numero']} para hoy.")
-    return confirmar(request, "solicitud", plaza, fecha, nombre)
+    if nueva:
+        models.avisar(conn, f"{nombre} solicita la plaza {plaza['numero']} para hoy.")
+    return confirmar(request, "solicitud", plaza, dia, nombre, token, nueva)
 
 
 @app.get("/confirmacion")
@@ -327,11 +391,23 @@ def cambiar_password(request: Request, actual: str = Form(...), nueva: str = For
 admin_only = [Depends(require_admin)]
 
 
+def alertas_admin(conn) -> list[str]:
+    """Cosas de la configuración que afectan al día a día y hay que resolver."""
+    alertas = []
+    if not models.get_config(conn, "admin_email"):
+        alertas.append("Falta tu correo en Ajustes: sin él, quien reserva no sabe a quién escribir para cancelar.")
+    for anio in models.faltan_festivos(conn):
+        alertas.append(f"Faltan los festivos de {anio}: añádelos en Ajustes para que no se pueda "
+                       "reservar en días sin trabajo.")
+    return alertas
+
+
 def admin_page(request: Request, conn, template: str, **context):
     return render(request, template, {
         "admin": True,
         "pendientes": models.contar_pendientes(conn),
         "no_leidos": models.contar_no_leidos(conn),
+        "alertas": alertas_admin(conn),
         **context,
     })
 
@@ -381,7 +457,15 @@ def _filtro(ver: str | None) -> str | None:
 @app.post("/admin/plazas/{plaza_id}/liberar", dependencies=admin_only)
 def admin_liberar(plaza_id: int, fecha: str = Form(...), ver: str | None = Form(None), conn=Depends(get_conn)):
     dia = parse_fecha(fecha)
+    antes = models.estado_plaza(conn, plaza_id, dia)
     error = models.liberar(conn, plaza_id, dia)
+    if not error:
+        cuando = fecha_larga(dia).lower()
+        if antes["estado"] == "reservada":
+            texto = f"Admin anuló la reserva de {antes['reservada_por']} en la plaza {antes['numero']} para {cuando}."
+        else:
+            texto = f"Admin cedió la plaza fija {antes['numero']} de {antes['titular']} para {cuando}."
+        models.avisar(conn, texto, leido=True)
     return redirect("/admin", fecha=dia.isoformat(), ver=_filtro(ver), error=error,
                     msg=None if error else "Plaza liberada.")
 
@@ -391,6 +475,11 @@ def admin_ocupar(plaza_id: int, fecha: str = Form(...), nombre: str = Form(""), 
                  conn=Depends(get_conn)):
     dia = parse_fecha(fecha)
     error = models.ocupar(conn, plaza_id, dia, nombre)
+    if not error:
+        p = models.estado_plaza(conn, plaza_id, dia)
+        quien = p["reservada_por"] if p["estado"] == "reservada" else f"su titular, {p['titular']}"
+        models.avisar(conn, f"Admin asignó la plaza {p['numero']} a {quien} para {fecha_larga(dia).lower()}.",
+                      leido=True)
     return redirect("/admin", fecha=dia.isoformat(), ver=_filtro(ver), error=error,
                     msg=None if error else "Plaza ocupada.")
 
@@ -465,7 +554,13 @@ def admin_festivo(fecha: str = Form(...), nombre: str = Form(...), conn=Depends(
     except ValueError:
         return redirect("/admin/ajustes", error="Fecha no válida.")
     error = models.add_festivo(conn, dia, nombre)
-    return redirect("/admin/ajustes", error=error, msg=None if error else "Festivo añadido.")
+    if error:
+        return redirect("/admin/ajustes", error=error)
+    msg = "Festivo añadido."
+    if n := models.reservas_del_dia(conn, dia):
+        msg += (f" Ojo: ese día ya hay {n} reserva{'s' if n != 1 else ''}; avisa a quien reservó "
+                "o libéralas desde el tablero.")
+    return redirect("/admin/ajustes", msg=msg)
 
 
 @app.post("/admin/festivos/{fecha}/borrar", dependencies=admin_only)

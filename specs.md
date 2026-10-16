@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Versión** | 1.7 |
+| **Versión** | 1.8 |
 | **Estado** | ✅ Implementado · quedan preguntas abiertas (§12) |
 | **Última revisión** | 16/10/2026 |
-| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (68 casos, todos en verde) · despliegue en `DEPLOY.md` |
+| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (86 casos, todos en verde) · despliegue en `DEPLOY.md` |
 
 **Leyenda de estado:** ✅ Implementado · 🟡 Parcial · ⬜ Pendiente
 
@@ -65,6 +65,8 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | RF-05 | Al terminar se muestra la confirmación **"Has reservado la plaza N"** (o "Has solicitado…") con la fecha, y el aviso **"Si quieres cancelar, envía un correo al admin"**, que incluye un enlace al correo si está configurado. | ✅ |
 | RF-06 | La aplicación recuerda el nombre en el navegador para no tener que escribirlo cada vez. | ✅ |
 | RF-07 | La pestaña del día siguiente indica el día real: "Mañana" o, si no es el día siguiente, el día de la semana ("Lunes", "Martes"…). | ✅ |
+| RF-08 | **«En este dispositivo»:** el inicio muestra lo que se ha reservado o solicitado desde ese navegador para hoy y los días siguientes, con su estado: reservada, pendiente, aprobada, rechazada (con el motivo) o anulada por el admin. No hay cuentas: cada reserva lleva un código aleatorio que solo conoce ese navegador. | ✅ |
+| RF-09 | Pulsar dos veces «Confirmar» no da error: la segunda vez se muestra la misma confirmación sin crear otra reserva. Los botones se desactivan al enviar. | ✅ |
 
 ### 5.2 Administrador
 
@@ -72,7 +74,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 |---|---|---|
 | RF-10 | El admin puede **ver todas las plazas** y su estado en cualquier día. El tablero marca los días no laborables y los días pasados, que solo se pueden consultar. | ✅ |
 | RF-10b | **Tablero de ocupación** con: indicadores del día (libres, reservadas, fijas en uso y solicitudes pendientes), barra de **ocupación** (ocupadas sobre el total, en %), **filtros** (todas, libres, ocupadas, fijas) y una **rejilla de plazas**. Cada plaza muestra su número, su estado, quién la ocupa y la acción que corresponde. En el móvil se ve en dos columnas y en el ordenador en varias. | ✅ |
-| RF-11 | El admin puede **liberar cualquier plaza**: anular su reserva o, si es fija, dejarla libre ese día. Así se gestionan también las cancelaciones que llegan por correo. | ✅ |
+| RF-11 | El admin puede **liberar cualquier plaza**: anular su reserva o, si es fija, dejarla libre ese día. Así se gestionan también las cancelaciones que llegan por correo. Anular una reserva pide confirmación. | ✅ |
 | RF-11b | El admin puede **marcar plazas como fijas** y **liberar una plaza fija para un día concreto, y solo ese día**. Puede ser **el mismo día** o cualquier día futuro. **Al día siguiente vuelve a estar cerrada.** En el tablero el botón aparece como «Liberar este día». | ✅ |
 | RF-12 | El admin puede **ocupar cualquier plaza** a nombre de cualquier persona, o devolver al titular una fija liberada. | ✅ |
 | RF-13 | El admin puede **aprobar o rechazar** las solicitudes para el mismo día. | ✅ |
@@ -83,23 +85,26 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | RF-17b | Cada plaza se edita **en una sola línea**: número, titular, guardar (✓) y eliminar (✕). **Si tiene titular, es fija; si el titular está vacío, es reservable.** | ✅ |
 | RF-18 | El admin puede **añadir y eliminar festivos**. | ✅ |
 | RF-19 | El admin puede configurar el **correo de contacto** que ve el usuario tras reservar. | ✅ |
+| RF-20 | El panel avisa de lo que falta configurar: el **correo de contacto** y, desde noviembre, los **festivos del año siguiente**. Al añadir un festivo en un día con reservas, indica cuántas hay. | ✅ |
+| RF-21 | Si el admin olvida su contraseña, se restablece desde el servidor con `python -m app.restablecer_password` (ver `DEPLOY.md`). | ✅ |
 
 ## 6. Reglas de negocio
 
 | ID | Regla |
 |---|---|
 | RN-01 | Una plaza admite **una sola reserva por día**. Si dos personas la reservan a la vez, la segunda recibe "plaza ya ocupada". |
-| RN-02 | Cada nombre puede tener como máximo **una reserva o una solicitud pendiente por día**. Al comparar nombres no se distinguen mayúsculas de minúsculas. |
+| RN-02 | Cada nombre puede tener como máximo **una reserva o una solicitud pendiente por día**. Al comparar nombres no se distinguen mayúsculas, minúsculas ni tildes («Álvaro» = «ALVARO»). El titular de una plaza fija **puede** reservar además otra plaza. |
+| RN-03b | El formulario lleva la fecha para la que se abrió. Si al enviarlo ya no es la que toca (por ejemplo, pasada la medianoche), no se reserva y se pide volver a elegir. |
 | RN-03 | La reserva directa siempre es para el **siguiente día laborable**. El usuario no puede elegir otra fecha. |
 | RN-04 | Solo se pueden solicitar plazas para hoy si **hoy es laborable**. Los fines de semana y festivos no aparece la pestaña "Hoy". |
 | RN-05 | Una solicitud **no bloquea** la plaza, así que puede haber varias para la misma. Si al aprobar una la plaza ya está ocupada, esa solicitud se **rechaza automáticamente** indicando el motivo. |
 | RN-06 | Una liberación afecta a **una sola fecha**. Ese día, la plaza fija funciona como reservable; antes y después sigue cerrada. Para cederla varios días hay que liberar cada día por separado. Si el admin la ocupa sin indicar nombre, o con el nombre del titular, vuelve a su titular. |
 | RN-06b | Una plaza fija se puede liberar **el mismo día**. Como es para hoy, quien la quiera la **solicita** y el admin aprueba (RN-04, RN-05). Si se libera para el siguiente día laborable o uno posterior, se puede reservar directamente cuando llegue su turno. |
 | RN-06c | No se pueden liberar ni ocupar plazas en **días pasados**. En el tablero, los días pasados se muestran sin botones. |
-| RN-07 | El número de plaza es **único**; no puede haber dos plazas con el mismo. Al renumerar una plaza, sus reservas, liberaciones y solicitudes se mantienen, porque están ligadas a la plaza y no a su número. |
+| RN-07 | El número de plaza es **único**; no puede haber dos plazas con el mismo. Al renumerar una plaza, sus reservas, liberaciones y solicitudes se mantienen, porque están ligadas a la plaza y no a su número. No se puede renumerar una plaza con **reservas futuras**, porque quien la reservó iría a otra plaza física. |
 | RN-07b | No se puede eliminar una plaza con reservas futuras; antes hay que liberarlas. |
 | RN-08 | Una plaza con reservas futuras no se puede convertir en fija. |
-| RN-09 | Las acciones del admin no generan avisos. Solo avisan las de los usuarios. |
+| RN-09 | Las acciones del admin no suben el contador de avisos, pero quedan en el **historial** de Avisos (por ejemplo, «Admin anuló la reserva de Ana en la plaza 23 para…»). |
 | RN-10 | Las cancelaciones las hace el admin (con "Liberar") cuando el usuario se lo pide por correo. |
 
 ## 7. Calendario laboral
@@ -193,7 +198,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | RNF-04 | **Sesiones del admin revocables:** token aleatorio en una cookie `HttpOnly` y `SameSite=Lax`, del que la base de datos solo guarda el hash. «Salir» invalida la sesión en el servidor, y cambiar la contraseña cierra las demás sesiones. La contraseña se guarda con *scrypt* (mínimo 10 caracteres). | ✅ |
 | RNF-05 | Tests automáticos que cubren todas las reglas anteriores, con la fecha de "hoy" fijada para probar fines de semana y festivos. | ✅ |
 | RNF-06 | **HTTPS** en producción. La app lo detecta detrás de un proxy (Caddy u otro): marca las cookies como `Secure` y envía HSTS. Configurada para un servidor: Caddy con certificado, y Uvicorn con `--proxy-headers` en el `Dockerfile` (ver `DEPLOY.md`). | 🟡 Configurada; falta comprobarla tras el primer despliegue |
-| RNF-07 | **Límites anti-abuso por IP:** 5 intentos de login fallidos cada 15 minutos, y 5 reservas o solicitudes por hora (`RESERVAS_POR_HORA`). Al superarlos se responde 429. | ✅ |
+| RNF-07 | **Límites anti-abuso por IP:** 5 intentos de login fallidos cada 15 minutos, y 5 reservas o solicitudes por hora **por dispositivo** (`RESERVAS_POR_HORA`), con un tope de 60 por hora **por IP** (`RESERVAS_POR_HORA_IP`) para que una oficina que sale por la misma IP no se bloquee. Al superarlos se responde 429. | ✅ |
 | RNF-08 | **Validación de entradas:** nombres de 60 caracteres como máximo y sin caracteres de control; números de plaza entre 0 y 99999; correo del admin con formato válido. | ✅ |
 | RNF-09 | **Cabeceras de seguridad:** `Content-Security-Policy` sin scripts en línea, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel del admin. Sin documentación pública de la API (`/docs`). | ✅ |
 | RNF-10 | Los **mensajes** tras una acción, incluida la confirmación de reserva, viajan en una cookie de un solo uso y no en la URL, así que no se pueden fabricar enlaces con textos falsos. | ✅ |
@@ -207,13 +212,17 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | ID | Tema | Situación actual | Propuesta |
 |---|---|---|---|
 | P-01 | **Canal de los avisos** | El aviso solo se ve al entrar en el panel de admin. | Enviarlo además por email, Telegram o notificación del móvil, para que llegue sin abrir la app. |
-| P-02 | **Resultado de la solicitud** | Como ya no existe "Mis reservas", el usuario no ve si su solicitud para hoy se aprobó. | Que el admin se lo comunique, o mostrar el estado en la pantalla de confirmación. |
+| P-02 | ~~Resultado de la solicitud~~ | **Resuelto en 1.8:** el inicio muestra el estado en «En este dispositivo» (RF-08). | — |
 | P-03 | ~~Contraseña por defecto~~ | **Resuelto en 1.6:** la app obliga a cambiarla en el primer acceso. | — |
-| P-04 | **Hora límite** para reservar el siguiente día laborable | Se puede reservar hasta las 23:59 del día anterior. | ¿Fijar una hora de cierre (por ejemplo, las 20:00)? |
+| P-04 | **Hora de apertura y cierre** para reservar el siguiente día laborable | Se puede reservar desde las 00:00 del día anterior hasta las 23:59: gana quien reserve justo después de medianoche. | ¿Fijar una hora de apertura (por ejemplo, las 18:00 del día anterior) o de cierre? |
 | P-05 | **Autogestión del titular** | Solo el admin puede liberar una plaza fija. | Permitir que el titular la ceda él mismo. |
 | P-06 | **Histórico** | Las reservas pasadas se guardan, pero no se pueden consultar. | Añadir una pantalla de histórico o una exportación a CSV. |
 | P-07 | **Despliegue** | Preparado en un servidor: imagen Docker en GHCR, Caddy, copias cifradas en almacenamiento externo y CI/CD con GitHub Actions (`DEPLOY.md`). | Activar `DEPLOY_ENABLED`, hacer el primer despliegue y comprobar RNF-06. |
-| P-08 | **Festivos de 2028** | Hay festivos cargados hasta 2027. | Añadirlos en Ajustes cuando se publiquen (BOCM, octubre a diciembre de 2027). |
+| P-08 | **Festivos de 2028** | Hay festivos cargados hasta 2027. Desde noviembre de 2027 el panel avisa de que faltan (RF-20). | Añadirlos en Ajustes cuando se publiquen (BOCM, octubre a diciembre de 2027). |
+| P-09 | **Fija cedida para hoy** | Si el admin cede hoy una plaza fija, quien la quiera aún tiene que solicitarla y el admin aprobarla otra vez (RN-06b). | ¿Reserva directa cuando es el propio admin quien la ha cedido? |
+| P-10 | **Cancelar sin correo** | Para cancelar hay que escribir al admin. | Con el código de RF-08, quien reservó podría cancelar desde su propio dispositivo. |
+| P-11 | **Un solo admin** | Si el admin no está, nadie aprueba solicitudes ni anula reservas. | ¿Un segundo admin o un suplente? |
+| P-12 | **Borrar una plaza** | Al eliminarla se borran también sus reservas pasadas. | Conservar el historial (relacionado con P-06). |
 
 ## 13. Historial de versiones
 
@@ -227,6 +236,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | 1.5 | 16/10/2026 | Rediseño del **tablero del admin**: indicadores, barra de ocupación, filtros por estado y rejilla de plazas con etiqueta de estado (punto de color siempre acompañado de texto). Modo claro y oscuro. |
 | 1.6 | 16/10/2026 | **Seguridad** (tras el análisis de seguridad): corregido el bloqueo de la base de datos con reservas simultáneas; cambio obligatorio de la contraseña de fábrica; límite de intentos de login y de reservas por IP; validación de nombres; sesiones revocables; cookies `Secure` y HSTS bajo HTTPS; cabeceras de seguridad y CSP; sin `/docs`; mensajes fuera de la URL; dependencias fijadas. |
 | 1.7 | 16/10/2026 | **Despliegue**: contenedor Docker, Caddy con HTTPS, copias cifradas, CI/CD, `/health/` y versión visible al pie. La contraseña inicial del admin puede venir de un archivo secreto (`ADMIN_PASSWORD_FILE`). |
+| 1.8 | 16/10/2026 | **Repaso funcional**: no se reserva otro día si se pasa la medianoche con el formulario abierto; doble toque en «Confirmar» o «Aprobar» sin errores ni estados incorrectos; nombres iguales sin distinguir tildes; límite de reservas por dispositivo (una oficina con la misma IP ya no se bloquea); «Liberar» pide confirmación y el admin deja historial; «En este dispositivo» con el estado de reservas y solicitudes (resuelve P-02); avisos de configuración pendiente; no se renumeran plazas con reservas futuras; restablecimiento de la contraseña del admin; sin plazas de ejemplo en producción. Nuevas preguntas P-09 a P-12. |
 
 ---
 

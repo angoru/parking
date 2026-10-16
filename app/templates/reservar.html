@@ -4,6 +4,7 @@
 <h1>Plaza {{ plaza.numero }}</h1>
 <p class="sub">{{ fecha | fecha_larga }}</p>
 <form method="post" action="/{{ 'solicitar' if dia == 'hoy' else 'reservar' }}/{{ plaza.id }}" class="card form">
+  <input type="hidden" name="fecha" value="{{ fecha.isoformat() }}">
   <label>Nombre
     <input name="nombre" value="{{ nombre }}" maxlength="{{ nombre_max }}" required autocomplete="name" autofocus>
   </label>

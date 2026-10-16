@@ -13,6 +13,19 @@ document.addEventListener("input", (e) => {
   }
 });
 
+// Desactiva los botones al enviar un formulario, para que un doble toque no lo envíe dos veces.
+// Se hace después del envío para que el botón pulsado siga viajando con el formulario.
+document.addEventListener("submit", (e) => {
+  if (e.defaultPrevented || e.target.method !== "post") return;
+  const botones = e.target.querySelectorAll("button");
+  setTimeout(() => botones.forEach((b) => { b.disabled = true; }), 0);
+});
+
+// Al volver atrás, el navegador puede mostrar la página con los botones desactivados
+window.addEventListener("pageshow", () => {
+  document.querySelectorAll("button:disabled").forEach((b) => { b.disabled = false; });
+});
+
 // Pide confirmación antes de acciones que no se pueden deshacer
 document.addEventListener("click", (e) => {
   const boton = e.target.closest("[data-confirmar]");

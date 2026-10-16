@@ -26,6 +26,7 @@
   <main class="{% block main_class %}{% endblock %}">
     {% if msg %}<p class="alert ok">{{ msg }}</p>{% endif %}
     {% if error %}<p class="alert err">{{ error }}</p>{% endif %}
+    {% for a in alertas or [] %}<p class="alert info">{{ a }}</p>{% endfor %}
     {% block content %}{% endblock %}
   </main>
   <footer class="app-footer">Versión v{{ app_version }}</footer>

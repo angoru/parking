@@ -36,8 +36,11 @@ Desde el móvil (en la misma red): `http://<ip-del-ordenador>:8642`.
 - **Contraseña del admin:** se guarda con *scrypt* en la base de datos. Cambiarla cierra las demás sesiones.
 - **Sesiones:** token aleatorio en una cookie `HttpOnly` y `SameSite=Lax`; en la base de datos solo se guarda su hash,
   así que «Salir» invalida la sesión de verdad.
-- **Límites por IP** (en memoria, se reinician al reiniciar el servidor):
-  5 intentos de login fallidos cada 15 minutos y `RESERVAS_POR_HORA` reservas o solicitudes por hora.
+- **Límites** (en memoria, se reinician al reiniciar el servidor): 5 intentos de login fallidos cada 15 minutos
+  por IP; `RESERVAS_POR_HORA` reservas o solicitudes por hora por dispositivo y `RESERVAS_POR_HORA_IP` por IP
+  (más alto, porque en una oficina todos salen por la misma IP).
+- **Contraseña olvidada:** `python -m app.restablecer_password` borra la guardada y cierra las sesiones; vuelve
+  a valer la de `ADMIN_PASSWORD_FILE` o `ADMIN_PASSWORD` (o `admin`, que obliga a cambiarla).
 - **Cabeceras:** `Content-Security-Policy` sin scripts en línea, `X-Frame-Options: DENY`, `nosniff`,
   `Referrer-Policy` y `Cache-Control: no-store` en el panel del admin. `--no-server-header` oculta el servidor.
 - **Mensajes:** los avisos tras una acción viajan en una cookie de un solo uso, nunca en la URL.
@@ -71,9 +74,10 @@ Si el proxy está en otra máquina, usa `COOKIE_SECURE=1` y pon su IP en `--forw
 | `ADMIN_PASSWORD` | —            | Contraseña inicial del admin. Sin ella, la inicial es `admin` y hay que cambiarla al entrar. La que se guarde desde la app tiene prioridad. |
 | `ADMIN_PASSWORD_FILE` | —       | Archivo con la contraseña inicial (secreto del contenedor). Tiene prioridad sobre `ADMIN_PASSWORD`; la guardada desde la app, sobre ambas. |
 | `COOKIE_SECURE`  | —            | `1` para marcar las cookies como `Secure` aunque la app no vea HTTPS (proxy en otra máquina). |
-| `RESERVAS_POR_HORA` | `5`       | Máximo de reservas y solicitudes por hora desde una misma IP. |
+| `RESERVAS_POR_HORA` | `5`       | Máximo de reservas y solicitudes por hora desde un mismo dispositivo. |
+| `RESERVAS_POR_HORA_IP` | `60`    | Máximo por hora desde una misma IP (frena scripts sin cookies). |
 | `PARKING_DB`     | `parking.db` | Ruta del archivo SQLite.                                   |
-| `PARKING_TOTAL`  | `10`         | Solo la primera vez: crea las plazas 1..N. Después se numeran desde Admin → Ajustes. |
+| `PARKING_TOTAL`  | `10`         | Solo la primera vez: crea las plazas 1..N (`0`: ninguna). Después se numeran desde Admin → Ajustes. |
 
 ## Páginas
 

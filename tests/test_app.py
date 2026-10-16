@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import calendario, seguridad
+from app import calendario, db, models, seguridad
+from app import main as app_main
 from app.main import APP_VERSION, app
 
 CLAVE = "clave-de-prueba-123"
@@ -22,6 +23,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("ADMIN_USER", raising=False)
     monkeypatch.setenv("ADMIN_PASSWORD", CLAVE)
     monkeypatch.setenv("RESERVAS_POR_HORA", "1000")
+    monkeypatch.setenv("RESERVAS_POR_HORA_IP", "1000")
     monkeypatch.setattr(calendario, "hoy", lambda: MIERCOLES)
     seguridad.limitador.reset()
     with TestClient(app) as c:
@@ -46,12 +48,22 @@ def libres(client, dia="siguiente"):
     return sorted(int(n) for n in re.findall(r'<span class="num">(\d+)</span>', html))
 
 
-def reservar(client, plaza_id, nombre="Ana"):
-    return client.post(f"/reservar/{plaza_id}", data={"nombre": nombre})
+def dia_permitido(tipo):
+    """Fecha que lleva el formulario: la que la app ofrece ahora para reservar o solicitar."""
+    conn = db.connect()
+    try:
+        d = app_main.dias_usuario(conn)[tipo]
+    finally:
+        conn.close()
+    return d.isoformat() if d else ""
 
 
-def solicitar(client, plaza_id, nombre="Ana"):
-    return client.post(f"/solicitar/{plaza_id}", data={"nombre": nombre})
+def reservar(client, plaza_id, nombre="Ana", fecha=None):
+    return client.post(f"/reservar/{plaza_id}", data={"nombre": nombre, "fecha": fecha or dia_permitido("siguiente")})
+
+
+def solicitar(client, plaza_id, nombre="Ana", fecha=None):
+    return client.post(f"/solicitar/{plaza_id}", data={"nombre": nombre, "fecha": fecha or dia_permitido("hoy")})
 
 
 def solicitud_ids(admin):
@@ -300,9 +312,11 @@ def test_cada_reserva_avisa_al_admin(admin):
     assert 'Avisos <span class="badge">' not in admin.get("/admin").text
 
 
-def test_acciones_del_admin_no_avisan(admin):
+def test_acciones_del_admin_quedan_en_el_historial_sin_avisar(admin):
+    # Lo que hace el propio admin no sube el contador, pero queda constancia
     admin.post("/admin/plazas/1/ocupar", data={"fecha": MIERCOLES.isoformat(), "nombre": "Visita"})
-    assert "Todavía no hay avisos" in admin.get("/admin/avisos").text
+    assert 'Avisos <span class="badge">' not in admin.get("/admin").text
+    assert "Admin asignó la plaza 1 a Visita para hoy" in admin.get("/admin/avisos").text
 
 
 # --- Admin: acceso y configuración -------------------------------------------
@@ -344,14 +358,23 @@ def plaza_id(admin, numero):
     return int(re.search(r'action="/admin/plazas/(\d+)" class="plaza-row">\s*<input[^>]*value="%d"' % numero, html).group(1))
 
 
-def test_renumerar_plaza_conserva_reservas(admin):
-    reservar(admin, 2, nombre="Ana")
+def test_renumerar_plaza(admin):
     r = admin.post("/admin/plazas/2", data={"numero": 214, "tipo": "reservable"})
     assert "Plaza 214 guardada" in r.text
     assert libres(admin, "hoy") == [1, 3, 4, 5, 214]
-    assert 214 not in libres(admin)                     # la reserva de Ana sigue en esa plaza
-    assert "Ana" in admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
     assert "Ya existe la plaza 3" in admin.post("/admin/plazas/2", data={"numero": 3, "tipo": "reservable"}).text
+
+
+def test_no_se_renumera_una_plaza_con_reservas_futuras(admin, monkeypatch):
+    # Quien reservó «la 2» iría a otra plaza física
+    reservar(admin, 2, nombre="Ana")
+    r = admin.post("/admin/plazas/2", data={"numero": 214, "tipo": "reservable"})
+    assert "tiene reservas futuras" in r.text
+    assert 214 not in libres(admin, "hoy")
+    # Cuando la reserva ya ha pasado, sí; y la reserva antigua sigue asociada a la plaza
+    hoy_es(monkeypatch, date(2026, 10, 16))
+    assert "Plaza 214 guardada" in admin.post("/admin/plazas/2", data={"numero": 214, "tipo": "reservable"}).text
+    assert "Ana" in admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
 
 
 def test_eliminar_plaza(admin):
@@ -382,3 +405,154 @@ def test_titular_decide_si_la_plaza_es_fija(admin):
     assert 3 not in libres(admin)
     admin.post("/admin/plazas/3", data={"numero": 3, "titular": "  "})
     assert 3 in libres(admin)
+
+
+# --- Repaso funcional: reservas ---------------------------------------------------
+
+def test_formulario_de_otro_dia_no_reserva(client, monkeypatch):
+    # Se abre la plaza el miércoles «para mañana, jueves» y se envía pasada la medianoche
+    vista_reserva, vista_solicitud = dia_permitido("siguiente"), dia_permitido("hoy")
+    hoy_es(monkeypatch, JUEVES)
+    assert "El día ha cambiado" in reservar(client, 1, fecha=vista_reserva).text
+    assert "El día ha cambiado" in solicitar(client, 2, fecha=vista_solicitud).text
+    assert 1 in libres(client) and 2 in libres(client, "hoy")
+
+
+def contar(sql, *params):
+    conn = db.connect()
+    try:
+        return conn.execute(sql, params).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_doble_envio_de_reserva_confirma_sin_duplicar(admin):
+    assert "Has reservado la plaza 1" in reservar(admin, 1, "Ana").text
+    assert "Has reservado la plaza 1" in reservar(admin, 1, "ana").text
+    assert contar("SELECT COUNT(*) FROM reservas") == 1
+    assert admin.get("/admin/avisos").text.count("ha reservado la plaza 1") == 1
+    assert "ya tiene una plaza" in reservar(admin, 2, "Ana").text  # otra plaza, en cambio, no
+
+
+def test_doble_envio_de_solicitud_confirma_sin_duplicar(admin):
+    assert "Has solicitado la plaza 1" in solicitar(admin, 1, "Ana").text
+    assert "Has solicitado la plaza 1" in solicitar(admin, 1, "Ana").text
+    assert len(solicitud_ids(admin)) == 1
+
+
+def test_nombres_iguales_sin_mayusculas_ni_tildes(admin):
+    reservar(admin, 1, "Álvaro")
+    assert "ya tiene una plaza" in reservar(admin, 2, "ALVARO").text
+    # Devolver una fija cedida a su titular aunque se escriba distinto
+    hacer_nominal(admin, 3, titular="Íñigo")
+    admin.post("/admin/plazas/3/liberar", data={"fecha": JUEVES.isoformat()})
+    admin.post("/admin/plazas/3/ocupar", data={"fecha": JUEVES.isoformat(), "nombre": "inigo"})
+    assert contar("SELECT COUNT(*) FROM reservas WHERE plaza_id = 3") == 0
+    assert 3 not in libres(admin)
+
+
+def test_titular_de_fija_puede_reservar_otra_plaza(admin):
+    hacer_nominal(admin, 1, titular="Luis")
+    assert "Has reservado la plaza 2" in reservar(admin, 2, "Luis").text
+
+
+def test_liberar_reserva_pide_confirmacion_y_queda_en_historial(admin):
+    reservar(admin, 1, "Ana")
+    admin.get("/admin/avisos")  # se marcan como leídos
+    html = admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
+    assert 'data-confirmar="¿Anular la reserva de Ana en la plaza 1?' in html
+    admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
+    assert 'Avisos <span class="badge">' not in admin.get("/admin").text
+    assert "Admin anuló la reserva de Ana en la plaza 1 para mañana" in admin.get("/admin/avisos").text
+
+
+# --- Repaso funcional: operativa diaria ---------------------------------------------
+
+def test_en_este_dispositivo(admin, monkeypatch):
+    assert "En este dispositivo" not in admin.get("/").text
+    reservar(admin, 1, "Ana")
+    solicitar(admin, 2, "Ana")
+    html = admin.get("/").text
+    assert "En este dispositivo" in html and "Reservada" in html and "Pendiente" in html
+    [sid] = solicitud_ids(admin)
+    admin.post(f"/admin/solicitudes/{sid}/aprobar")
+    assert "Aprobada" in admin.get("/").text
+    admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
+    assert "ya no está activa" in admin.get("/").text
+    # Otro dispositivo no ve nada, y los días pasados desaparecen
+    with TestClient(app) as otro:
+        assert "En este dispositivo" not in otro.get("/").text
+    hoy_es(monkeypatch, date(2026, 10, 16))
+    assert "En este dispositivo" not in admin.get("/").text
+
+
+def test_solicitud_rechazada_se_ve_en_el_dispositivo(admin):
+    solicitar(admin, 1, "Ana")
+    [sid] = solicitud_ids(admin)
+    admin.post(f"/admin/solicitudes/{sid}/rechazar")
+    assert "Rechazada" in admin.get("/").text
+
+
+def test_cookie_de_dispositivo_manipulada_no_muestra_nada(client):
+    client.cookies.set("parking_mias", "r.2026-10-15.no-es-un-token-valido!,x.basura")
+    r = client.get("/")
+    assert r.status_code == 200 and "En este dispositivo" not in r.text
+
+
+def test_alertas_de_configuracion(admin, monkeypatch):
+    assert "Falta tu correo" in admin.get("/admin").text
+    admin.post("/admin/email", data={"email": "admin@ejemplo.es"})
+    assert "Falta tu correo" not in admin.get("/admin").text
+    assert "Faltan los festivos" not in admin.get("/admin").text
+    hoy_es(monkeypatch, date(2027, 11, 3))
+    assert "Faltan los festivos de 2028" in admin.get("/admin").text
+
+
+def test_festivo_sobre_un_dia_con_reservas_avisa(admin):
+    reservar(admin, 1, "Ana")
+    r = admin.post("/admin/festivos", data={"fecha": JUEVES.isoformat(), "nombre": "Fiesta"})
+    assert "ya hay 1 reserva;" in r.text
+
+
+def test_restablecer_password(admin):
+    from app import restablecer_password
+    nueva = "otra-clave-larga-9"
+    admin.post("/admin/password", data={"actual": CLAVE, "nueva": nueva, "repetir": nueva})
+    admin.post("/admin/logout")
+    assert "incorrectos" in admin.post("/admin/login", data={"usuario": "admin", "password": CLAVE}).text
+    admin.post("/admin/login", data={"usuario": "admin", "password": nueva})
+    assert "ADMIN_PASSWORD" in restablecer_password.restablecer()
+    assert admin.get("/admin", follow_redirects=False).headers["location"] == "/admin/login"  # sesiones cerradas
+    assert admin.post("/admin/login", data={"usuario": "admin", "password": CLAVE}).url.path == "/admin"
+
+
+def test_sin_plazas_de_ejemplo(tmp_path, monkeypatch):
+    monkeypatch.setenv("PARKING_DB", str(tmp_path / "vacia.db"))
+    monkeypatch.setenv("PARKING_TOTAL", "0")
+    db.init_db()
+    assert contar("SELECT COUNT(*) FROM plazas") == 0
+
+
+def test_migracion_de_una_base_de_datos_antigua(tmp_path, monkeypatch):
+    import sqlite3
+    ruta = tmp_path / "antigua.db"
+    monkeypatch.setenv("PARKING_DB", str(ruta))
+    antigua = sqlite3.connect(ruta)
+    antigua.executescript("""
+        CREATE TABLE plazas (id INTEGER PRIMARY KEY, numero INTEGER NOT NULL UNIQUE,
+                             tipo TEXT NOT NULL DEFAULT 'reservable', titular TEXT);
+        CREATE TABLE reservas (id INTEGER PRIMARY KEY, plaza_id INTEGER NOT NULL, fecha TEXT NOT NULL,
+                               nombre TEXT NOT NULL, creada_en TEXT NOT NULL DEFAULT (datetime('now')),
+                               UNIQUE (plaza_id, fecha));
+        INSERT INTO plazas (numero) VALUES (116);
+        INSERT INTO reservas (plaza_id, fecha, nombre) VALUES (1, '2026-10-15', 'Ana');
+    """)
+    antigua.close()
+    db.init_db()
+    conn = db.connect()
+    try:
+        assert "token" in {c["name"] for c in conn.execute("PRAGMA table_info(reservas)")}
+        assert conn.execute("SELECT nombre, token FROM reservas").fetchone()[:] == ("Ana", None)
+        assert models.list_plazas(conn)[0]["numero"] == 116
+    finally:
+        conn.close()
