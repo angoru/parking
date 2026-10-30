@@ -330,7 +330,7 @@ def test_dependencias_con_version_fija():
 
 # --- 11. Repaso de seguridad de octubre de 2026 ------------------------------------------------
 
-@pytest.mark.parametrize("origen", ["https://otra-web.example", "https://otra.example.com", "null"])
+@pytest.mark.parametrize("origen", ["https://otra-web.example", "https://otra.testserver", "null"])
 def test_post_desde_otro_origen_se_rechaza(client, origen):
     r = client.post("/reservar/1", data={"nombre": "Ana", "fecha": JUEVES}, headers={"Origin": origen})
     assert r.status_code == 403 and r.headers["x-frame-options"] == "DENY"

@@ -62,7 +62,7 @@ def cookie_segura(request: Request) -> bool:
 
 def origen_ajeno(request: Request) -> bool:
     """Defensa contra CSRF además de SameSite=Lax, que no frena a otras webs del mismo dominio
-    (en example.com, los demás proyectos del servidor). Los navegadores envían Origin en todo POST."""
+    (por ejemplo, las de otros subdominios). Los navegadores envían Origin en todo POST."""
     origen = request.headers.get("origin")
     return request.method == "POST" and origen is not None and urlsplit(origen).netloc != request.headers.get("host")
 

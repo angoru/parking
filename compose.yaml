@@ -1,0 +1,33 @@
+# Arranque con un solo comando: docker compose up --build
+name: parking
+
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:${PUERTO:-8642}:8000"
+    environment:
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      PARKING_TOTAL: ${PARKING_TOTAL:-10}
+      TZ: Europe/Madrid
+    volumes:
+      - datos:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  datos:

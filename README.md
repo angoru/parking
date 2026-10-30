@@ -11,30 +11,85 @@ Aplicación web, pensada para el móvil, para repartir las plazas de un garaje c
 |---|---|
 | Este README | Arrancar el proyecto y entender cómo trabajar en él |
 | [`specs.md`](specs.md) | Qué debe hacer la aplicación: requisitos, reglas de negocio y preguntas abiertas (§12) |
-| [`DEPLOY.md`](DEPLOY.md) | Servidor, secretos, copias de seguridad, restauración y cómo desplegar en otro servidor |
 
-**Stack:** Python 3.14 · FastAPI · Jinja2 · SQLite. HTML generado en el servidor, sin JavaScript de terceros ni paso de compilación.
+**Stack:** Docker · Python 3.14 · FastAPI · Jinja2 · SQLite. HTML generado en el servidor, sin JavaScript de terceros ni paso de compilación.
 
 ## Puesta en marcha
 
-Solo necesitas Python 3.14, la versión que usan CI y producción.
+La app se ejecuta en Docker. **Solo necesitas Docker con Compose:**
 
 ```bash
 git clone https://github.com/angoru/parking.git
 cd parking
+docker compose up --build
+```
+
+Abre <http://127.0.0.1:8642>. La primera vez se crean las plazas de ejemplo 1 a 10 y los festivos de Madrid.
+
+Para entrar al panel, ve a <http://127.0.0.1:8642/admin/login> con `admin` / `admin`. La app obliga a elegir una contraseña de al menos 10 caracteres antes de dejarte usarlo.
+
+| Quiero… | Cómo |
+|---|---|
+| Arrancar en segundo plano | `docker compose up -d --build` |
+| Ver los logs | `docker compose logs -f app` |
+| Parar, conservando los datos | `docker compose down` |
+| Empezar de cero, **borrando los datos** | `docker compose down -v` |
+| Recuperar el acceso del admin | `docker compose exec app python -m app.restablecer_password` |
+| Aplicar parches de Python y Debian | `docker compose build --pull && docker compose up -d` |
+
+Los datos están en el volumen `datos`, en un único archivo SQLite (`/data/parking.db`).
+
+### Para desarrollar
+
+Docker basta para ejecutar la app. Para trabajar en el código, con recarga automática y tests, necesitas además Python 3.14:
+
+```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest
 .venv/bin/uvicorn app.main:app --reload --port 8642
 ```
 
-Abre <http://127.0.0.1:8642>. La primera vez se crea `parking.db` con las plazas de ejemplo 1 a 10 y los festivos de Madrid.
+Así, los datos van a `parking.db`, en la carpeta del proyecto; para empezar de cero, borra `parking.db*`.
 
-Para entrar al panel, ve a <http://127.0.0.1:8642/admin/login> con `admin` / `admin`. La app obliga a elegir una contraseña de al menos 10 caracteres antes de dejarte usarlo.
+Para pasar los tests sin instalar Python:
 
-Para empezar de cero, para el servidor y borra `parking.db*`.
+```bash
+docker run --rm -v "$PWD":/src:ro,Z python:3.14-slim sh -c 'cp -r /src /tmp/p && cd /tmp/p && pip install -q -r requirements-dev.txt && python -m pytest -q'
+```
 
-> **No publiques la app sin configurar `ADMIN_PASSWORD`.** Mientras nadie haya cambiado la contraseña de fábrica, el primero que llegue a `/admin/login` se queda con el panel. Por eso tampoco conviene usar `--host 0.0.0.0` (para probar desde el móvil) en una red que no sea de confianza. El despliegue se detiene si falta ese secreto.
+## Desplegar
+
+Este repositorio **no incluye despliegue ni credenciales**: cada instalación decide dónde y cómo se ejecuta. Vale cualquier sitio donde se pueda correr la imagen del `Dockerfile`, y `compose.yaml` es un buen punto de partida. Hay que respetar lo siguiente:
+
+- **Contraseña:** define `ADMIN_PASSWORD` o `ADMIN_PASSWORD_FILE`, o cambia la de fábrica nada más arrancar. Mientras siga siendo la de fábrica, **el primero que llegue a `/admin/login` se queda con el panel**.
+- **Plazas:** usa `PARKING_TOTAL=0` y da de alta las reales en **Ajustes**. Configura también el correo de contacto.
+- **Una sola réplica:** los límites de intentos están en memoria y SQLite es un único archivo.
+- **Disco persistente en `/data`,** escribible por el UID 10001. No sirve un sistema de archivos de red: SQLite en modo WAL necesita memoria compartida en la misma máquina.
+- **Proxy con HTTPS** que conserve la cabecera `Host` (si no, todo POST recibe un 403) y sobrescriba `X-Forwarded-For`. Con [Caddy](https://caddyserver.com/) basta con esto:
+  ```
+  garaje.tudominio.es {
+      reverse_proxy 127.0.0.1:8642
+  }
+  ```
+- **Solo el proxy puede llegar al puerto de la app:** la imagen confía en sus cabeceras con `--forwarded-allow-ips "*"`. Si el puerto queda expuesto, se puede falsear la IP y saltarse los límites. Por eso `compose.yaml` lo publica en `127.0.0.1`.
+
+**Secretos:** nunca en el repositorio. `.env` está en `.gitignore`, y Compose lo lee solo.
+
+### Copias de seguridad
+
+Nunca copies el archivo con la app en marcha: usa la API de backup de SQLite. Las copias contienen nombres de personas, así que guárdalas cifradas.
+
+```bash
+# Hacer una copia
+docker compose exec app python -c "import sqlite3; sqlite3.connect('/data/parking.db').backup(sqlite3.connect('/data/copia.db'))"
+docker compose cp app:/data/copia.db ./copia.db
+
+# Restaurarla: copia.db tiene que ser legible por todos (chmod 644)
+docker compose stop app
+docker compose run --rm --no-deps -v "$PWD/copia.db":/copia.db:ro,Z app sh -c 'cp /copia.db /data/parking.db && rm -f /data/parking.db-wal /data/parking.db-shm'
+docker compose start app
+```
 
 ## Cómo está organizado
 
@@ -51,8 +106,8 @@ tests/
   test_app.py              Reglas de negocio y pantallas.
   test_seguridad.py        Seguridad y concurrencia, con un servidor real en algunos casos.
   test_frontend.py         Calidad y estructura del HTML y el CSS.
-deploy/                    Compose, Caddy, script de copias y timer de systemd.
-.github/                   Pipeline de CI/CD y Dependabot.
+Dockerfile  compose.yaml   Imagen de la app y arranque con un solo comando.
+.github/                   CI sin secretos (tests, auditoría, imagen) y Dependabot.
 ```
 
 **Una petición:** la ruta de `main.py` recibe una conexión con `conn=Conn`, llama a `models.py` y responde con una plantilla o una redirección. Al terminar la ruta se confirma la transacción, antes de enviar la respuesta. Si se lanza una excepción, se deshace.
@@ -93,7 +148,7 @@ No las reabras sin hablarlo con quien lleva el proyecto:
 
 1. **Requisitos:** los nuevos llegan a la sección `# Inbox`, al final de `specs.md`. Se implementan, se pasan al cuerpo de la especificación con una versión nueva en su historial (§13) y el Inbox se queda vacío con una nota.
 2. **Cambios:** en una rama, con tests. `specs.md` se actualiza en el mismo cambio.
-3. **Publicar:** subir a `main` no despliega nada; **lo que llega a producción son las releases** (ver la sección siguiente).
+3. **Publicar:** subir a `main` solo pasa los tests. Las versiones se marcan con una release (ver la sección siguiente).
 
 Las **preguntas abiertas** y los próximos pasos están en `specs.md` §12.
 
@@ -103,7 +158,7 @@ Las **preguntas abiertas** y los próximos pasos están en `specs.md` §12.
 
 ### Versiones y releases
 
-`VERSION` sigue `mayor.menor.parche` y aparece al pie de todas las páginas, así que ese pie dice qué hay en producción. La versión de `specs.md` es la del documento, no la de la app.
+`VERSION` sigue `mayor.menor.parche` y aparece al pie de todas las páginas, así que ese pie dice qué versión está en marcha. La versión de `specs.md` es la del documento, no la de la app.
 
 | Subo… | Cuando… |
 |---|---|
@@ -111,50 +166,19 @@ Las **preguntas abiertas** y los próximos pasos están en `specs.md` §12.
 | `menor` (1.**2**.0) | Añado funciones |
 | `mayor` (**2**.0.0) | El cambio no es compatible: por ejemplo, una versión anterior ya no funcionaría con la base de datos |
 
-**Para publicar una versión**, con los cambios ya en `main` y los tests en verde:
-
-```bash
-echo 1.2.0 > VERSION
-git commit -am "Versión 1.2.0" && git push origin main
-gh release create v1.2.0 --generate-notes --title v1.2.0
-```
-
-Publicar la release **despliega en producción sin más aprobación**. Las notas generadas solo enumeran pull requests; si has subido directamente a `main`, escríbelas con `--notes`.
-
-| Qué ocurre | Tests y auditoría | Imagen y despliegue |
-|---|---|---|
-| Push o PR a `main` | Sí | No |
-| Release publicada | Sí | Sí, de esa release |
-| Domingo a las 03:00 UTC | Sí | Sí, de la última release, reconstruida con los parches del momento |
-| `gh workflow run deploy.yml -f tag=v1.1.0` | Sí | Sí, de la release indicada |
-| Borrador o pre-release | No | No |
-
-El pipeline se detiene sin desplegar si la release no se llama `vX.Y.Z` o si `VERSION` no coincide con ella. En ese caso, borra la release con `gh release delete v1.2.0 --cleanup-tag`, corrígelo y vuelve a crearla. Una release creada desde otro workflow con `GITHUB_TOKEN` no despliega, porque GitHub no lanza workflows con ese token.
-
-**Si una versión sale mal:** si no arranca, el despliegue vuelve solo a la imagen anterior. Si arranca pero funciona mal, despliega la buena con `gh workflow run deploy.yml -f tag=v1.1.0` y márcala como última con `gh release edit v1.1.0 --latest`; si no, el domingo se volvería a desplegar la mala.
+Cambia `VERSION` en un PR y, una vez fusionado, crea la release con el mismo número: `gh release create v1.2.0 --generate-notes --title v1.2.0`. La release solo marca la versión: **no despliega nada**. Subir `VERSION` es imprescindible si cambian el CSS o el JS, porque los navegadores los guardan por versión.
 
 ### Actualizaciones
 
 | Qué | Cómo se fija | Cómo se actualiza |
 |---|---|---|
-| Python y Debian | `python:3.14-slim`, libre dentro de la 3.14 | **Solos**, en la reconstrucción semanal |
-| Dependencias indirectas (Starlette, Pydantic…) | Sin fijar | **Solas**, en la reconstrucción semanal |
-| Dependencias directas (`requirements.txt`) | Versión exacta | Dependabot abre un PR semanal: **hay que fusionarlo y publicar una release** |
-| Acciones de GitHub | Commit exacto | Dependabot abre un PR semanal: **hay que fusionarlo**. El domingo se usa el pipeline de `main`, con los archivos de la última release |
-| Python 3.15 y siguientes | — | **A mano**: cambia `Dockerfile` y `deploy.yml`, y prueba |
+| Python y Debian | `python:3.14-slim`, libre dentro de la 3.14 | Al reconstruir la imagen con `--pull` |
+| Dependencias indirectas (Starlette, Pydantic…) | Sin fijar | Al reconstruir la imagen sin caché |
+| Dependencias directas (`requirements.txt`) | Versión exacta | Dependabot abre un PR semanal: **hay que fusionarlo** |
+| Acciones de GitHub | Commit exacto | Dependabot abre un PR semanal: **hay que fusionarlo** |
+| Python 3.15 y siguientes | — | **A mano**: cambia `Dockerfile` y `ci.yml`, y prueba |
 
-El job `audit` pasa `pip-audit` en cada ejecución. Si falla, no frena el despliegue, pero GitHub envía un correo. **Mira esos correos y los PR de Dependabot: es lo único de este proceso que necesita a una persona.** Fusionar un PR no llega a producción: las correcciones de seguridad en dependencias directas necesitan una release de parche. Los avisos de las ejecuciones programadas llegan a quien modificó por última vez el `cron`, así que si cambia el responsable, debe cambiarlo o comprobar sus notificaciones.
-
-## Operación
-
-| Quiero… | Cómo |
-|---|---|
-| Ver si producción funciona | `curl -fsS https://garaje.example.com/health/` |
-| Ver los logs | `cd /opt/app && docker compose logs -f app` |
-| Recuperar el acceso del admin | `cd /opt/app && docker compose exec app python -m app.restablecer_password` |
-| Volver a una versión anterior | `gh workflow run deploy.yml -f tag=v1.1.0` (ver [Versiones y releases](#versiones-y-releases)) |
-| Restaurar una copia de seguridad | [`DEPLOY.md`](DEPLOY.md#restaurar-una-copia) |
-| Desplegar en otro servidor | [`DEPLOY.md`](DEPLOY.md#desplegar-en-otro-servidor) |
+CI pasa `pip-audit` también cada domingo, aunque nadie toque el código. Si falla, GitHub envía un correo a quien modificó por última vez el `cron`. **Nada se actualiza solo en una instalación ya en marcha:** hay que reconstruir la imagen.
 
 ## Variables de entorno
 
@@ -166,10 +190,11 @@ El job `audit` pasa `pip-audit` en cada ejecución. Si falla, no frena el despli
 | `COOKIE_SECURE` | — | `1` para marcar las cookies como `Secure` aunque la app no vea HTTPS. |
 | `RESERVAS_POR_HORA` | `5` | Reservas y solicitudes por hora desde un dispositivo. |
 | `RESERVAS_POR_HORA_IP` | `60` | Reservas y solicitudes por hora desde una IP. Es más alto porque en una oficina todos comparten IP. |
-| `PARKING_DB` | `parking.db` | Ruta del archivo SQLite. |
+| `PARKING_DB` | `/data/parking.db` en la imagen; `parking.db` sin Docker | Ruta del archivo SQLite. |
 | `PARKING_TOTAL` | `10` | Solo al crear la base de datos: plazas de ejemplo 1..N. En producción, `0`. |
+| `PUERTO` | `8642` | Solo en `compose.yaml`: puerto local donde se publica la app. |
 
-La contraseña guardada desde el panel tiene prioridad sobre las dos de arriba. Por eso, **cambiar el secreto `ADMIN_PASSWORD` no cambia la contraseña** si ya se ha cambiado desde la app. Para volver al secreto, usa `restablecer_password`.
+La contraseña guardada desde el panel tiene prioridad sobre las dos de arriba. Por eso, **cambiar `ADMIN_PASSWORD` no cambia la contraseña** si ya se ha cambiado desde la app. Para volver a ella, usa `restablecer_password`.
 
 ## Seguridad
 
@@ -179,26 +204,23 @@ La URL es pública y quien reserva no se identifica, así que lo que hay que pro
 
 - **Contraseña:** *scrypt*, mínimo 10 caracteres, 5 intentos fallidos por IP cada 15 minutos.
 - **Sesiones:** token aleatorio en cookie `HttpOnly`, `SameSite=Lax` y `Secure`. En la base de datos solo está su hash, así que «Salir» invalida la sesión de verdad. Cambiar la contraseña cierra las demás.
-- **CSRF:** `SameSite=Lax`, y además se rechaza con 403 cualquier POST cuyo `Origin` no coincida con el `Host`. En `example.com` hace falta lo segundo: los demás proyectos del servidor cuentan como el mismo sitio, y `SameSite` no los frena.
+- **CSRF:** `SameSite=Lax`, y además se rechaza con 403 cualquier POST cuyo `Origin` no coincida con el `Host`. Lo segundo hace falta porque `SameSite` no frena a otras webs del mismo dominio.
 - **XSS:** autoescape de Jinja2 y CSP sin scripts ni estilos en línea.
 - **SQL:** siempre con parámetros. Los avisos de `bandit` sobre `models.py` (B608) son falsos positivos: las partes interpoladas son constantes del código.
 - **Cabeceras:** CSP, HSTS, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel.
-- **Contenedor:** usuario sin privilegios, sistema de archivos de solo lectura salvo `/data`, sin *capabilities* y solo accesible desde Caddy.
-- **Copias:** cifradas con restic. **CI:** acciones fijadas por commit, porque reciben la clave SSH del servidor.
-
-**Si cambias de proxy:** tiene que conservar la cabecera `Host` (Caddy lo hace) y sobrescribir `X-Forwarded-For`. `--forwarded-allow-ips "*"` en el `Dockerfile` solo es seguro porque el puerto se publica en `127.0.0.1` y Caddy es lo único que llega a él. Si cambia cualquiera de las dos cosas, se podría falsear la IP y saltarse los límites.
+- **Contenedor:** usuario sin privilegios, sistema de archivos de solo lectura salvo `/data`, sin *capabilities* y publicado solo en `127.0.0.1`.
+- **Repositorio:** sin secretos ni credenciales, y CI sin acceso a ningún servidor. Las acciones de CI van fijadas por commit.
 
 **Riesgos conocidos y aceptados por ahora:**
 
 | Riesgo | Situación | Seguimiento |
 |---|---|---|
 | Cualquiera con la URL puede reservar con cualquier nombre | Es consecuencia de no tener cuentas. El límite por IP frena pero no impide llenar el garaje, y la URL aparece en los registros públicos de certificados. El admin puede liberar las plazas. | P-13 |
-| El despliegue entra como `root` en un servidor compartido | Si alguien se hace con la cuenta de GitHub o con la clave, controla también los demás proyectos del servidor. | P-14 |
-| Dependencias indirectas y base sin fijar | Es a propósito, para recibir los parches sin intervención. A cambio, una versión maliciosa de una dependencia llegaría a producción sin revisión en el siguiente domingo, y dos construcciones pueden ser distintas. | P-15 |
-| Los nombres se guardan sin límite de tiempo | Son datos personales: siguen en `reservas` y `avisos` indefinidamente, y en las copias hasta 12 meses. | P-16 |
+| Dependencias indirectas y base sin fijar | Es a propósito, para recibir los parches al reconstruir. A cambio, dos construcciones pueden ser distintas y una versión maliciosa entraría sin revisión. | P-15 |
+| Los nombres se guardan sin límite de tiempo | Son datos personales: siguen en `reservas` y `avisos` indefinidamente, y en las copias que se hagan. | P-16 |
 | Un solo admin, sin segundo factor | La sesión dura 30 días. | P-11 |
 | Límites en memoria | Se reinician al reiniciar el contenedor. | Aceptado |
-| `parking_flash` sin `Secure` | Solo lleva mensajes durante 60 segundos, y HTTPS ya es obligatorio. | Aceptado |
+| `parking_flash` sin `Secure` | Solo lleva mensajes durante 60 segundos. | Aceptado |
 
 Para revisar las dependencias a mano: `pip install pip-audit && pip-audit -r requirements.txt`.
 

@@ -1,0 +1,50 @@
+name: CI
+
+# Sin secretos ni despliegue: solo comprueba el código.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Cada semana, para avisar de vulnerabilidades nuevas aunque nadie toque el código
+  schedule:
+    - cron: '0 3 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Instalar dependencias
+        run: pip install -r requirements-dev.txt
+      - name: Pasar los tests
+        run: python -m pytest -q
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Buscar vulnerabilidades conocidas
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
+
+  # Lo que hace quien clona el repositorio: construir la imagen y arrancarla
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Construir y arrancar
+        run: docker compose up -d --build --wait --wait-timeout 120
+      - name: Comprobar que responde
+        run: curl -fsS http://127.0.0.1:8642/health/

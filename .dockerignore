@@ -6,7 +6,8 @@ __pycache__
 *.pyc
 *.db
 tests
-deploy
+compose.yaml
+Dockerfile
 specs.md
 README.md
 .env
