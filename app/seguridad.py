@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 
 from . import models
@@ -123,24 +123,32 @@ class Limitador:
     """Ventana deslizante por clave. Se reinicia al reiniciar el servidor, lo que basta
     para frenar la fuerza bruta y los scripts de reservas."""
 
-    def __init__(self):
-        self._eventos: dict[str, deque] = defaultdict(deque)
-        self._lock = threading.Lock()
+    # Ninguna ventana es más larga; pasado este tiempo, las claves sin actividad se borran
+    RETENCION = 3600
 
-    def _limpiar(self, clave: str, ventana: int) -> deque:
-        eventos = self._eventos[clave]
-        limite = time.monotonic() - ventana
-        while eventos and eventos[0] < limite:
-            eventos.popleft()
-        return eventos
+    def __init__(self):
+        self._eventos: dict[str, deque] = {}
+        self._lock = threading.Lock()
+        self._proxima_limpieza = time.monotonic() + self.RETENCION
 
     def excedido(self, clave: str, maximo: int, ventana: int) -> bool:
         with self._lock:
-            return len(self._limpiar(clave, ventana)) >= maximo
+            # Solo se guarda lo que se anota: la clave puede venir de una cookie inventada
+            eventos = self._eventos.get(clave)
+            if not eventos:
+                return False
+            limite = time.monotonic() - ventana
+            while eventos and eventos[0] < limite:
+                eventos.popleft()
+            return len(eventos) >= maximo
 
     def anotar(self, clave: str) -> None:
         with self._lock:
-            self._eventos[clave].append(time.monotonic())
+            ahora = time.monotonic()
+            self._eventos.setdefault(clave, deque()).append(ahora)
+            if ahora >= self._proxima_limpieza:
+                self._eventos = {k: v for k, v in self._eventos.items() if v and v[-1] >= ahora - self.RETENCION}
+                self._proxima_limpieza = ahora + self.RETENCION
 
     def olvidar(self, clave: str) -> None:
         with self._lock:

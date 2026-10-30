@@ -556,3 +556,53 @@ def test_migracion_de_una_base_de_datos_antigua(tmp_path, monkeypatch):
         assert models.list_plazas(conn)[0]["numero"] == 116
     finally:
         conn.close()
+
+
+# --- Repaso de octubre de 2026 ---------------------------------------------------
+
+def test_repetir_una_reserva_creada_por_el_admin(admin):
+    # La reserva del admin no tiene token: si esa persona tenía el formulario abierto, no da error
+    admin.post("/admin/plazas/1/ocupar", data={"fecha": JUEVES.isoformat(), "nombre": "Ana"})
+    assert "Has reservado la plaza 1" in reservar(admin, 1, "Ana").text
+    assert "En este dispositivo" not in admin.get("/").text
+
+
+@pytest.mark.parametrize("fecha", ["0001-01-01", "9999-12-31"])
+def test_tablero_en_los_extremos_del_calendario(admin, fecha):
+    r = admin.get("/admin", params={"fecha": fecha})
+    assert r.status_code == 200 and MIERCOLES.isoformat() in r.text
+
+
+@pytest.mark.parametrize("numeros", ["²", "١٢", "1" * 5000, "1-" + "9" * 5000],
+                         ids=["superindice", "arabe", "enorme", "rango-enorme"])
+def test_numeros_de_plaza_raros_no_dan_error_500(admin, numeros):
+    assert "Escribe números de plaza" in admin.post("/admin/plazas", data={"numeros": numeros}).text
+
+
+def test_no_se_devuelve_una_fija_en_un_dia_pasado(admin, monkeypatch):
+    admin.post("/admin/plazas/1", data={"numero": 1, "titular": "Tito"})
+    admin.post("/admin/plazas/1/liberar", data={"fecha": MIERCOLES.isoformat()})
+    hoy_es(monkeypatch, JUEVES)
+    r = admin.post("/admin/plazas/1/ocupar", data={"fecha": MIERCOLES.isoformat(), "nombre": ""})
+    assert "No se puede ocupar un día pasado" in r.text
+    conn = db.connect()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM liberaciones").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_avisos_resalta_los_no_leidos_y_no_las_acciones_del_admin(admin):
+    reservar(admin, 1, "Luz")
+    admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
+    html = admin.get("/admin/avisos").text
+    tarjetas = re.findall(r'<li class="card aviso ([a-z]*)">\s*<div>(.*?)</div>', html)
+    assert [clase for clase, _ in tarjetas] == ["", "nuevo"]
+    assert "Luz ha reservado" in tarjetas[1][1]
+
+
+def test_fija_liberada_en_otro_dia_no_dice_hoy(admin):
+    admin.post("/admin/plazas/1", data={"numero": 1, "titular": "Tito"})
+    admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
+    html = admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
+    assert "Libre este día" in html and "Libre hoy" not in html

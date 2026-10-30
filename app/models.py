@@ -1,3 +1,4 @@
+import re
 import secrets
 import sqlite3
 import unicodedata
@@ -8,6 +9,7 @@ from . import calendario, db
 NOMBRE_MAX = 60
 NUMERO_MAX = 99999
 TEXTO_MAX = 80
+NUMERO_RE = re.compile(r"[0-9]{1,5}")
 
 
 def _hoy() -> str:
@@ -57,7 +59,7 @@ def parse_numeros(texto: str) -> list[int] | None:
         if not parte:
             continue
         desde, _, hasta = parte.partition("-")
-        if not desde.strip().isdigit() or (hasta and not hasta.strip().isdigit()):
+        if not NUMERO_RE.fullmatch(desde.strip()) or (hasta and not NUMERO_RE.fullmatch(hasta.strip())):
             return None
         desde, hasta = int(desde), int(hasta or desde)
         if hasta < desde or hasta - desde > 500 or hasta > NUMERO_MAX:
@@ -99,6 +101,7 @@ def _reservas_futuras(conn: sqlite3.Connection, plaza_id: int) -> bool:
 
 def update_plaza(conn: sqlite3.Connection, plaza_id: int, numero: int, tipo: str, titular: str | None) -> str | None:
     """Cambia número, tipo y titular. Las reservas siguen asociadas a la plaza aunque cambie su número."""
+    _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
@@ -130,6 +133,7 @@ def update_plaza(conn: sqlite3.Connection, plaza_id: int, numero: int, tipo: str
 
 
 def borrar_plaza(conn: sqlite3.Connection, plaza_id: int) -> str | None:
+    _bloquear_escritura(conn)
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
@@ -356,6 +360,8 @@ def ocupar(conn: sqlite3.Connection, plaza_id: int, fecha: date, nombre: str) ->
     plaza = get_plaza(conn, plaza_id)
     if plaza is None:
         return "La plaza no existe."
+    if fecha < calendario.hoy():
+        return "No se puede ocupar un día pasado."
     nombre = limpiar_texto(nombre)
     if plaza["tipo"] == "nominal" and esta_libre(conn, plaza_id, fecha) and (
         not nombre or db.normalizar(nombre) == db.normalizar(plaza["titular"])

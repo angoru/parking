@@ -1,6 +1,8 @@
 """Pruebas de los hallazgos del análisis de seguridad."""
+import base64
 import re
 import socket
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -324,3 +326,76 @@ def test_dependencias_con_version_fija():
             linea = linea.split("#")[0].strip()
             if linea and not linea.startswith("-r"):
                 assert re.fullmatch(r"[A-Za-z0-9_.\[\]-]+==[0-9][0-9A-Za-z.]*", linea), linea
+
+
+# --- 11. Repaso de seguridad de octubre de 2026 ------------------------------------------------
+
+@pytest.mark.parametrize("origen", ["https://otra-web.example", "https://otra.example.com", "null"])
+def test_post_desde_otro_origen_se_rechaza(client, origen):
+    r = client.post("/reservar/1", data={"nombre": "Ana", "fecha": JUEVES}, headers={"Origin": origen})
+    assert r.status_code == 403 and r.headers["x-frame-options"] == "DENY"
+    assert 'href="/reservar/1?' in client.get("/").text  # sigue libre
+
+
+def test_post_del_mismo_origen_o_sin_origen_funciona(client):
+    r = client.post("/reservar/1", data={"nombre": "Ana", "fecha": JUEVES}, headers={"Origin": "http://testserver"})
+    assert "Has reservado la plaza 1" in r.text
+    assert "Has reservado la plaza 2" in client.post("/reservar/2", data={"nombre": "Eva", "fecha": JUEVES}).text
+
+
+def test_la_reserva_se_guarda_antes_de_responder(servidor, entorno):
+    # Si el commit fuera después de responder, la confirmación podría llegar sin nada guardado
+    class CommitLento(sqlite3.Connection):
+        def commit(self):
+            time.sleep(0.3)
+            super().commit()
+
+    def conectar():
+        conn = sqlite3.connect(db.db_path(), timeout=15, check_same_thread=False, factory=CommitLento)
+        conn.row_factory = sqlite3.Row
+        conn.create_function("normalizar", 1, db.normalizar, deterministic=True)
+        return conn
+
+    entorno.setattr(db, "connect", conectar)
+    r = httpx.post(f"{servidor}/reservar/1", data={"nombre": "Ana", "fecha": JUEVES}, timeout=30)
+    assert r.headers["location"] == "/confirmacion"
+    guardadas = sqlite3.connect(db.db_path()).execute("SELECT COUNT(*) FROM reservas").fetchone()[0]
+    assert guardadas == 1
+
+
+def test_cookies_inventadas_no_llenan_la_memoria(client):
+    for i in range(50):
+        client.cookies.set("parking_dispositivo", f"inventada-{i:010d}-xx")
+        client.post("/reservar/1", data={"nombre": "x", "fecha": "2000-01-01"})
+    assert len(seguridad.limitador._eventos) == 0
+
+
+def test_limitador_olvida_las_claves_sin_actividad():
+    limitador = seguridad.Limitador()
+    limitador.anotar("vieja")
+    limitador._eventos["vieja"][0] -= limitador.RETENCION + 1
+    limitador._proxima_limpieza = 0
+    limitador.anotar("nueva")
+    assert set(limitador._eventos) == {"nueva"}
+
+
+def test_cookie_del_nombre_no_accesible_desde_javascript(client):
+    r = client.post("/reservar/1", data={"nombre": "Ana", "fecha": JUEVES}, follow_redirects=False)
+    cookie = next(v for k, v in r.headers.multi_items() if k == "set-cookie" and v.startswith("parking_nombre"))
+    assert "HttpOnly" in cookie
+
+
+@pytest.mark.parametrize("metodo, ruta", [
+    ("get", "/reservar/99999999999999999999"),
+    ("post", "/reservar/99999999999999999999"),
+    ("post", "/solicitar/99999999999999999999"),
+])
+def test_id_que_no_cabe_en_sqlite_no_da_error_500(client, metodo, ruta):
+    datos = {"data": {"nombre": "x", "fecha": JUEVES}} if metodo == "post" else {}
+    assert getattr(client, metodo)(ruta, **datos).status_code == 422
+
+
+@pytest.mark.parametrize("valor", ["{}", '{"conf": {"tipo": "reserva", "plaza": 1, "fecha": 5}}'])
+def test_flash_manipulado_no_da_error_500(client, valor):
+    client.cookies.set(seguridad.FLASH_COOKIE, base64.urlsafe_b64encode(valor.encode()).decode())
+    assert client.get("/confirmacion").status_code == 200

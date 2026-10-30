@@ -2,12 +2,12 @@
 {% block title %}Avisos{% endblock %}
 {% block content %}
 <h1>Avisos</h1>
-<p class="sub">Reservas, solicitudes y cancelaciones hechas por los usuarios.</p>
+<p class="sub">Reservas y solicitudes de los usuarios, y lo que ha hecho el admin.</p>
 
 {% if avisos %}
   <ul class="list">
     {% for a in avisos %}
-      <li class="card aviso {% if loop.index <= nuevos %}nuevo{% endif %}">
+      <li class="card aviso {% if not a.leido %}nuevo{% endif %}">
         <div>{{ a.texto }}</div>
         <div class="sub">{{ a.creado_en[:16] | replace("T", " ") }}</div>
       </li>

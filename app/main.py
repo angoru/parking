@@ -4,10 +4,13 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from urllib.parse import quote, unquote, urlencode
+from typing import Annotated
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import Depends, FastAPI, Form, HTTPException
+from fastapi import Path as PathParam
+from fastapi import Request, status
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -27,6 +30,8 @@ DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", 
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# Un id de la URL que no cabe en un entero de SQLite daría un error 500
+IdFila = Annotated[int, PathParam(ge=0, le=2**63 - 1)]
 
 # El estilo en línea solo se usa para el ancho de la barra de ocupación; scripts, solo los propios
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -55,9 +60,19 @@ def cookie_segura(request: Request) -> bool:
     return es_https(request) or os.environ.get("COOKIE_SECURE") == "1"
 
 
+def origen_ajeno(request: Request) -> bool:
+    """Defensa contra CSRF además de SameSite=Lax, que no frena a otras webs del mismo dominio
+    (en example.com, los demás proyectos del servidor). Los navegadores envían Origin en todo POST."""
+    origen = request.headers.get("origin")
+    return request.method == "POST" and origen is not None and urlsplit(origen).netloc != request.headers.get("host")
+
+
 @app.middleware("http")
 async def cabeceras_de_seguridad(request: Request, call_next):
-    resp = await call_next(request)
+    if origen_ajeno(request):
+        resp = PlainTextResponse("Origen no permitido.", status_code=status.HTTP_403_FORBIDDEN)
+    else:
+        resp = await call_next(request)
     resp.headers["Content-Security-Policy"] = CSP
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["X-Content-Type-Options"] = "nosniff"
@@ -94,11 +109,18 @@ def get_conn():
         conn.close()
 
 
+# scope="function": la transacción se confirma antes de responder. Con el valor por defecto,
+# el navegador recibiría «Has reservado» antes de que la reserva estuviera guardada.
+Conn = Depends(get_conn, scope="function")
+
+
 def parse_fecha(valor: str | None) -> date:
     try:
-        return date.fromisoformat(valor) if valor else calendario.hoy()
-    except ValueError:
+        d = date.fromisoformat(valor) if valor else calendario.hoy()
+    except (TypeError, ValueError):
         return calendario.hoy()
+    # El tablero enlaza al día anterior y al siguiente: no pueden salirse del calendario
+    return d if date.min < d < date.max else calendario.hoy()
 
 
 def ip_cliente(request: Request) -> str:
@@ -188,12 +210,12 @@ def _ir_a(path: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": path})
 
 
-def require_sesion(request: Request, conn=Depends(get_conn)) -> None:
+def require_sesion(request: Request, conn=Conn) -> None:
     if not seguridad.sesion_valida(conn, request.cookies.get(SESION_COOKIE)):
         raise _ir_a("/admin/login")
 
 
-def require_admin(request: Request, conn=Depends(get_conn), _=Depends(require_sesion)) -> None:
+def require_admin(request: Request, conn=Conn, _=Depends(require_sesion)) -> None:
     # Con la contraseña de fábrica solo se puede entrar a cambiarla
     if seguridad.usa_password_por_defecto(conn):
         raise _ir_a("/admin/password")
@@ -202,13 +224,13 @@ def require_admin(request: Request, conn=Depends(get_conn), _=Depends(require_se
 # --- Público ---------------------------------------------------------------
 
 @app.get("/health/", include_in_schema=False)
-def health(conn=Depends(get_conn)):
+def health(conn=Conn):
     conn.execute("SELECT 1").fetchone()
     return {"status": "ok"}
 
 
 @app.get("/")
-def libres(request: Request, dia: str | None = None, conn=Depends(get_conn)):
+def libres(request: Request, dia: str | None = None, conn=Conn):
     dia, fecha, dias = elegir_dia(conn, dia)
     return recordar_dispositivo(request, render(request, "libres.html", {
         "dia": dia,
@@ -220,7 +242,7 @@ def libres(request: Request, dia: str | None = None, conn=Depends(get_conn)):
 
 
 @app.get("/reservar/{plaza_id}")
-def reservar_form(request: Request, plaza_id: int, dia: str | None = None, conn=Depends(get_conn)):
+def reservar_form(request: Request, plaza_id: IdFila, dia: str | None = None, conn=Conn):
     dia, fecha, _ = elegir_dia(conn, dia)
     plaza = models.get_plaza(conn, plaza_id)
     if plaza is None or not models.esta_libre(conn, plaza_id, fecha):
@@ -262,9 +284,12 @@ def confirmar(request: Request, tipo: str, plaza, fecha: date, nombre: str, toke
             seguridad.limitador.anotar(clave)
     resp = redirect("/confirmacion", conf={"tipo": tipo, "plaza": plaza["numero"], "fecha": fecha.isoformat()})
     resp.set_cookie(NOMBRE_COOKIE, quote(models.limpiar_texto(nombre)), max_age=365 * 24 * 3600,
-                    samesite="lax", secure=cookie_segura(request))
-    entrada = (tipo[0], fecha.isoformat(), token)
-    mias = [e for e in leer_mias(request) if e != entrada] + [entrada]
+                    httponly=True, samesite="lax", secure=cookie_segura(request))
+    mias = leer_mias(request)
+    # Las reservas que crea el admin no tienen token: no se pueden seguir desde el dispositivo
+    if token:
+        entrada = (tipo[0], fecha.isoformat(), token)
+        mias = [e for e in mias if e != entrada] + [entrada]
     resp.set_cookie(MIAS_COOKIE, ",".join(".".join(e) for e in mias[-MIAS_MAX:]), max_age=30 * 24 * 3600,
                     httponly=True, samesite="lax", secure=cookie_segura(request))
     return resp
@@ -274,8 +299,8 @@ DIA_CAMBIADO = "El día ha cambiado desde que abriste la plaza: vuelve a elegirl
 
 
 @app.post("/reservar/{plaza_id}")
-def reservar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: str = Form(""),
-             conn=Depends(get_conn)):
+def reservar(request: Request, plaza_id: IdFila, nombre: str = Form(...), fecha: str = Form(""),
+             conn=Conn):
     if bloqueo := demasiadas_reservas(request):
         return bloqueo
     dia = dias_usuario(conn)["siguiente"]
@@ -293,8 +318,8 @@ def reservar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: st
 
 
 @app.post("/solicitar/{plaza_id}")
-def solicitar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: str = Form(""),
-              conn=Depends(get_conn)):
+def solicitar(request: Request, plaza_id: IdFila, nombre: str = Form(...), fecha: str = Form(""),
+              conn=Conn):
     if bloqueo := demasiadas_reservas(request):
         return bloqueo
     dia = dias_usuario(conn)["hoy"]
@@ -313,7 +338,7 @@ def solicitar(request: Request, plaza_id: int, nombre: str = Form(...), fecha: s
 
 
 @app.get("/confirmacion")
-def confirmacion(request: Request, conn=Depends(get_conn)):
+def confirmacion(request: Request, conn=Conn):
     # Los datos llegan en la cookie de un solo uso: no se puede fabricar una confirmación con un enlace
     conf = flash(request).get("conf")
     if not isinstance(conf, dict):
@@ -339,7 +364,7 @@ def login_form(request: Request):
 
 
 @app.post("/admin/login")
-def login(request: Request, usuario: str = Form(...), password: str = Form(...), conn=Depends(get_conn)):
+def login(request: Request, usuario: str = Form(...), password: str = Form(...), conn=Conn):
     clave = f"login:{ip_cliente(request)}"
     if seguridad.limitador.excedido(clave, seguridad.LOGIN_MAX_FALLOS, seguridad.LOGIN_VENTANA):
         return render(request, "login.html", {
@@ -357,7 +382,7 @@ def login(request: Request, usuario: str = Form(...), password: str = Form(...),
 
 
 @app.post("/admin/logout")
-def logout(request: Request, conn=Depends(get_conn)):
+def logout(request: Request, conn=Conn):
     seguridad.cerrar_sesion(conn, request.cookies.get(SESION_COOKIE))
     resp = redirect("/admin/login")
     resp.delete_cookie(SESION_COOKIE)
@@ -365,7 +390,7 @@ def logout(request: Request, conn=Depends(get_conn)):
 
 
 @app.get("/admin/password", dependencies=[Depends(require_sesion)])
-def password_form(request: Request, conn=Depends(get_conn)):
+def password_form(request: Request, conn=Conn):
     return render(request, "password.html", {
         "admin": True,
         "obligatorio": seguridad.usa_password_por_defecto(conn),
@@ -375,7 +400,7 @@ def password_form(request: Request, conn=Depends(get_conn)):
 
 @app.post("/admin/password", dependencies=[Depends(require_sesion)])
 def cambiar_password(request: Request, actual: str = Form(...), nueva: str = Form(...), repetir: str = Form(...),
-                     conn=Depends(get_conn)):
+                     conn=Conn):
     if not seguridad.password_correcta(conn, actual):
         return redirect("/admin/password", error="La contraseña actual no es correcta.")
     error = seguridad.validar_password_nueva(nueva, repetir)
@@ -420,7 +445,7 @@ FILTROS = {
 
 
 @app.get("/admin", dependencies=admin_only)
-def admin(request: Request, fecha: str | None = None, ver: str | None = None, conn=Depends(get_conn)):
+def admin(request: Request, fecha: str | None = None, ver: str | None = None, conn=Conn):
     dia = parse_fecha(fecha)
     plazas = models.estado_plazas(conn, dia)
     no_laborable = calendario.festivo(conn, dia) or ("Fin de semana" if dia.weekday() >= 5 else None)
@@ -455,7 +480,7 @@ def _filtro(ver: str | None) -> str | None:
 
 
 @app.post("/admin/plazas/{plaza_id}/liberar", dependencies=admin_only)
-def admin_liberar(plaza_id: int, fecha: str = Form(...), ver: str | None = Form(None), conn=Depends(get_conn)):
+def admin_liberar(plaza_id: IdFila, fecha: str = Form(...), ver: str | None = Form(None), conn=Conn):
     dia = parse_fecha(fecha)
     antes = models.estado_plaza(conn, plaza_id, dia)
     error = models.liberar(conn, plaza_id, dia)
@@ -471,8 +496,8 @@ def admin_liberar(plaza_id: int, fecha: str = Form(...), ver: str | None = Form(
 
 
 @app.post("/admin/plazas/{plaza_id}/ocupar", dependencies=admin_only)
-def admin_ocupar(plaza_id: int, fecha: str = Form(...), nombre: str = Form(""), ver: str | None = Form(None),
-                 conn=Depends(get_conn)):
+def admin_ocupar(plaza_id: IdFila, fecha: str = Form(...), nombre: str = Form(""), ver: str | None = Form(None),
+                 conn=Conn):
     dia = parse_fecha(fecha)
     error = models.ocupar(conn, plaza_id, dia, nombre)
     if not error:
@@ -485,35 +510,34 @@ def admin_ocupar(plaza_id: int, fecha: str = Form(...), nombre: str = Form(""), 
 
 
 @app.get("/admin/solicitudes", dependencies=admin_only)
-def admin_solicitudes(request: Request, conn=Depends(get_conn)):
+def admin_solicitudes(request: Request, conn=Conn):
     return admin_page(request, conn, "admin_solicitudes.html",
                       solicitudes=models.solicitudes_pendientes(conn))
 
 
 @app.post("/admin/solicitudes/{solicitud_id}/aprobar", dependencies=admin_only)
-def admin_aprobar(solicitud_id: int, conn=Depends(get_conn)):
+def admin_aprobar(solicitud_id: IdFila, conn=Conn):
     error = models.aprobar(conn, solicitud_id)
     return redirect("/admin/solicitudes", error=error, msg=None if error else "Solicitud aprobada.")
 
 
 @app.post("/admin/solicitudes/{solicitud_id}/rechazar", dependencies=admin_only)
-def admin_rechazar(solicitud_id: int, conn=Depends(get_conn)):
+def admin_rechazar(solicitud_id: IdFila, conn=Conn):
     ok = models.rechazar(conn, solicitud_id)
     return redirect("/admin/solicitudes", msg="Solicitud rechazada." if ok else None,
                     error=None if ok else "La solicitud ya no está pendiente.")
 
 
 @app.get("/admin/avisos", dependencies=admin_only)
-def admin_avisos(request: Request, conn=Depends(get_conn)):
-    # Se calculan los no leídos antes de marcarlos, para resaltarlos en esta visita
-    no_leidos = models.contar_no_leidos(conn)
+def admin_avisos(request: Request, conn=Conn):
+    # Se leen antes de marcarlos, para resaltar los no leídos en esta visita
     avisos = models.avisos_recientes(conn)
     models.marcar_leidos(conn)
-    return admin_page(request, conn, "admin_avisos.html", avisos=avisos, nuevos=no_leidos)
+    return admin_page(request, conn, "admin_avisos.html", avisos=avisos)
 
 
 @app.get("/admin/ajustes", dependencies=admin_only)
-def admin_ajustes(request: Request, conn=Depends(get_conn)):
+def admin_ajustes(request: Request, conn=Conn):
     return admin_page(request, conn, "admin_ajustes.html",
                       email=models.get_config(conn, "admin_email") or "",
                       festivos=models.festivos_futuros(conn),
@@ -523,7 +547,7 @@ def admin_ajustes(request: Request, conn=Depends(get_conn)):
 
 
 @app.post("/admin/plazas", dependencies=admin_only)
-def admin_crear_plazas(numeros: str = Form(...), conn=Depends(get_conn)):
+def admin_crear_plazas(numeros: str = Form(...), conn=Conn):
     creadas, error = models.crear_plazas(conn, numeros)
     msg = None
     if creadas:
@@ -532,14 +556,14 @@ def admin_crear_plazas(numeros: str = Form(...), conn=Depends(get_conn)):
 
 
 @app.post("/admin/plazas/{plaza_id}/borrar", dependencies=admin_only)
-def admin_borrar_plaza(plaza_id: int, conn=Depends(get_conn)):
+def admin_borrar_plaza(plaza_id: IdFila, conn=Conn):
     plaza = models.get_plaza(conn, plaza_id)
     error = models.borrar_plaza(conn, plaza_id)
     return redirect("/admin/ajustes", error=error, msg=None if error else f"Plaza {plaza['numero']} eliminada.")
 
 
 @app.post("/admin/email", dependencies=admin_only)
-def admin_email(email: str = Form(""), conn=Depends(get_conn)):
+def admin_email(email: str = Form(""), conn=Conn):
     email = email.strip()
     if email and (len(email) > 254 or not EMAIL_RE.fullmatch(email)):
         return redirect("/admin/ajustes", error="El correo no es válido.")
@@ -548,7 +572,7 @@ def admin_email(email: str = Form(""), conn=Depends(get_conn)):
 
 
 @app.post("/admin/festivos", dependencies=admin_only)
-def admin_festivo(fecha: str = Form(...), nombre: str = Form(...), conn=Depends(get_conn)):
+def admin_festivo(fecha: str = Form(...), nombre: str = Form(...), conn=Conn):
     try:
         dia = date.fromisoformat(fecha)
     except ValueError:
@@ -564,15 +588,15 @@ def admin_festivo(fecha: str = Form(...), nombre: str = Form(...), conn=Depends(
 
 
 @app.post("/admin/festivos/{fecha}/borrar", dependencies=admin_only)
-def admin_borrar_festivo(fecha: str, conn=Depends(get_conn)):
+def admin_borrar_festivo(fecha: str, conn=Conn):
     ok = models.delete_festivo(conn, fecha)
     return redirect("/admin/ajustes", msg="Festivo eliminado." if ok else None,
                     error=None if ok else "Ese festivo no existe.")
 
 
 @app.post("/admin/plazas/{plaza_id}", dependencies=admin_only)
-def admin_plaza(plaza_id: int, numero: int = Form(...), titular: str = Form(""), tipo: str | None = Form(None),
-                conn=Depends(get_conn)):
+def admin_plaza(plaza_id: IdFila, numero: int = Form(...), titular: str = Form(""), tipo: str | None = Form(None),
+                conn=Conn):
     # Con titular la plaza es fija; sin él, reservable
     tipo = tipo or ("nominal" if titular.strip() else "reservable")
     error = models.update_plaza(conn, plaza_id, numero, tipo, titular)
