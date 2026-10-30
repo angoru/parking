@@ -3,6 +3,7 @@
 FROM python:3.14-slim
 
 LABEL org.opencontainers.image.source="https://github.com/angoru/parking"
+LABEL org.opencontainers.image.licenses="0BSD"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -16,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY --chown=10001:10001 app ./app
 COPY --chown=10001:10001 VERSION ./VERSION
+COPY --chown=10001:10001 LICENSE ./LICENSE
 
 USER 10001:10001
 EXPOSE 8000

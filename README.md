@@ -203,4 +203,4 @@ Para revisar las dependencias a mano: `pip install pip-audit && pip-audit -r req
 
 ## Licencia
 
-Este proyecto se distribuye bajo la licencia [0BSD](LICENSE), una licencia libre muy permisiva que permite usar, modificar y distribuir el código sin exigir atribución.
+El código propio de este proyecto se distribuye bajo la licencia [0BSD](LICENSE), una licencia libre muy permisiva que permite usar, modificar y distribuir ese código sin exigir atribución. Las dependencias conservan sus respectivas licencias y sus condiciones de redistribución.
