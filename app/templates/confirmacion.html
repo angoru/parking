@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Plaza {{ plaza }}{% endblock %}
 {% block content %}
-<section class="card confirm">
-  <div class="big-num">{{ plaza }}</div>
+<section class="tarjeta confirmacion">
+  <div class="confirmacion-numero" aria-hidden="true">{{ plaza }}</div>
   {% if tipo == 'solicitud' %}
     <h1>Has solicitado la plaza {{ plaza }}</h1>
-    <p class="sub">{{ fecha | fecha_larga }}</p>
+    <p class="texto-suave">{{ fecha | fecha_larga }}</p>
     <p>El admin tiene que aprobar la solicitud.</p>
   {% else %}
     <h1>Has reservado la plaza {{ plaza }}</h1>
-    <p class="sub">{{ fecha | fecha_larga }}</p>
+    <p class="texto-suave">{{ fecha | fecha_larga }}</p>
   {% endif %}
-  <p class="hint">
+  <p class="ayuda">
     Si quieres cancelar, envía un correo al admin{% if email %}:
     <a href="{{ mailto }}">{{ email }}</a>{% else %}.{% endif %}
   </p>
-  <a class="btn" href="/">Volver</a>
+  <a class="boton" href="/">Volver</a>
 </section>
 {% endblock %}

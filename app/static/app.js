@@ -6,6 +6,11 @@ document.addEventListener("change", (e) => {
   if (e.target.matches("[data-autoenvio]")) e.target.form.submit();
 });
 
+// El campo de fecha va invisible sobre el texto: al tocarlo se abre el selector, no solo en su icono
+document.addEventListener("click", (e) => {
+  if (e.target.matches("[data-autoenvio]") && e.target.showPicker) e.target.showPicker();
+});
+
 // Marca en azul el titular de una plaza fija mientras se escribe
 document.addEventListener("input", (e) => {
   if (e.target.matches("[data-titular]")) {

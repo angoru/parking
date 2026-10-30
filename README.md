@@ -50,6 +50,7 @@ app/
 tests/
   test_app.py              Reglas de negocio y pantallas.
   test_seguridad.py        Seguridad y concurrencia, con un servidor real en algunos casos.
+  test_frontend.py         Calidad y estructura del HTML y el CSS.
 deploy/                    Compose, Caddy, script de copias y timer de systemd.
 .github/                   Pipeline de CI/CD y Dependabot.
 ```
@@ -74,7 +75,8 @@ deploy/                    Compose, Caddy, script de copias y timer de systemd.
 - **`nominal` en el código es «fija» en la interfaz.** El código y la interfaz están en español.
 - **Comprobar y escribir, siempre con bloqueo.** Toda función que compruebe algo y luego escriba empieza por `_bloquear_escritura(conn)`, porque hay peticiones simultáneas.
 - **Nunca `date.today()`.** Usa `calendario.hoy()`, que va en hora de Madrid y que los tests pueden fijar.
-- **Nada de JavaScript en línea.** Ni `<script>` ni `onclick`: la CSP lo bloquea y un test lo comprueba. El comportamiento va en `app.js`.
+- **Nada de JavaScript ni CSS en línea.** Ni `<script>`, `onclick` o `style=`: la CSP lo bloquea y un test lo comprueba. El comportamiento va en `app.js` y los estilos, en `style.css`.
+- **CSS:** clases en español y en kebab-case, con el patrón `componente` y `componente-parte` o `componente-variante`. Colores, tamaños de letra y radios salen de las variables de `:root`. `tests/test_frontend.py` comprueba todo esto, además de que no sobren clases ni variables y de que cada página tenga un `h1` y sus campos, nombre accesible.
 - **Los mensajes no van en la URL.** Usa `redirect(path, msg=...)`, que los manda en una cookie de un solo uso.
 - **Base de datos:** una columna nueva se añade a `SCHEMA` y a `COLUMNAS_NUEVAS` en `db.py`, y se migra sola al arrancar. Para cambios más complejos no hay herramienta de migraciones.
 - **Toda regla nueva lleva su test.** Las pruebas fijan la fecha con `monkeypatch`, así que no dependen del día en que se ejecutan.
@@ -178,7 +180,7 @@ La URL es pública y quien reserva no se identifica, así que lo que hay que pro
 - **Contraseña:** *scrypt*, mínimo 10 caracteres, 5 intentos fallidos por IP cada 15 minutos.
 - **Sesiones:** token aleatorio en cookie `HttpOnly`, `SameSite=Lax` y `Secure`. En la base de datos solo está su hash, así que «Salir» invalida la sesión de verdad. Cambiar la contraseña cierra las demás.
 - **CSRF:** `SameSite=Lax`, y además se rechaza con 403 cualquier POST cuyo `Origin` no coincida con el `Host`. En `example.com` hace falta lo segundo: los demás proyectos del servidor cuentan como el mismo sitio, y `SameSite` no los frena.
-- **XSS:** autoescape de Jinja2 y CSP sin scripts en línea.
+- **XSS:** autoescape de Jinja2 y CSP sin scripts ni estilos en línea.
 - **SQL:** siempre con parámetros. Los avisos de `bandit` sobre `models.py` (B608) son falsos positivos: las partes interpoladas son constantes del código.
 - **Cabeceras:** CSP, HSTS, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel.
 - **Contenedor:** usuario sin privilegios, sistema de archivos de solo lectura salvo `/data`, sin *capabilities* y solo accesible desde Caddy.
@@ -197,7 +199,6 @@ La URL es pública y quien reserva no se identifica, así que lo que hay que pro
 | Un solo admin, sin segundo factor | La sesión dura 30 días. | P-11 |
 | Límites en memoria | Se reinician al reiniciar el contenedor. | Aceptado |
 | `parking_flash` sin `Secure` | Solo lleva mensajes durante 60 segundos, y HTTPS ya es obligatorio. | Aceptado |
-| CSP con `style-src 'unsafe-inline'` | Hace falta para el ancho de la barra de ocupación. Los scripts siguen bloqueados. | Aceptado |
 
 Para revisar las dependencias a mano: `pip install pip-audit && pip-audit -r requirements.txt`.
 

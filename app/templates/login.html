@@ -2,13 +2,13 @@
 {% block title %}Acceso admin{% endblock %}
 {% block content %}
 <h1>Acceso admin</h1>
-<form method="post" action="/admin/login" class="card form">
+<form method="post" action="/admin/login" class="tarjeta formulario">
   <label>Usuario
     <input name="usuario" required autocomplete="username" autocapitalize="none" autofocus>
   </label>
   <label>Contraseña
     <input name="password" type="password" required autocomplete="current-password">
   </label>
-  <button class="btn primary" type="submit">Entrar</button>
+  <button class="boton boton-primario" type="submit">Entrar</button>
 </form>
 {% endblock %}

@@ -33,8 +33,8 @@ EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 # Un id de la URL que no cabe en un entero de SQLite daría un error 500
 IdFila = Annotated[int, PathParam(ge=0, le=2**63 - 1)]
 
-# El estilo en línea solo se usa para el ancho de la barra de ocupación; scripts, solo los propios
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+# Scripts y estilos, solo los propios: nada en línea
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
 
 

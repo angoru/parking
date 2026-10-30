@@ -1,21 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
+<h1 class="oculto-visualmente">Plazas libres</h1>
 {% if mias %}
-  <section class="card mias">
+  <section class="tarjeta mis-reservas">
     <h2>En este dispositivo</h2>
     <ul>
       {% for m in mias %}
-        <li class="mia {{ m.estado }}">
+        <li class="mi-reserva">
           {% if m.estado == 'anulada' %}
             <span>Tu {{ m.tipo }}{% if m.numero %} de la plaza <strong>{{ m.numero }}</strong>{% endif %}
               para {{ (m.fecha | fecha_larga) | lower }} ya no está activa.</span>
-            <span class="tag no">Anulada</span>
+            <span class="etiqueta etiqueta-no">Anulada</span>
           {% else %}
             <span>{{ "Solicitud de la plaza" if m.tipo == 'solicitud' else "Plaza" }} <strong>{{ m.numero }}</strong>
               · {{ m.fecha | fecha_larga }}{% if m.motivo %}<br><small>{{ m.motivo }}</small>{% endif %}</span>
             {% set etiqueta = {"reservada": ("ok", "Reservada"), "aprobada": ("ok", "Aprobada"),
-                               "pendiente": ("wait", "Pendiente"), "rechazada": ("no", "Rechazada")}[m.estado] %}
-            <span class="tag {{ etiqueta[0] }}">{{ etiqueta[1] }}</span>
+                               "pendiente": ("espera", "Pendiente"), "rechazada": ("no", "Rechazada")}[m.estado] %}
+            <span class="etiqueta etiqueta-{{ etiqueta[0] }}">{{ etiqueta[1] }}</span>
           {% endif %}
         </li>
       {% endfor %}
@@ -23,29 +24,29 @@
   </section>
 {% endif %}
 {% if dias.hoy %}
-  <nav class="tabs">
-    <a href="/?dia=hoy" {% if dia == 'hoy' %}class="active"{% endif %}>Hoy</a>
-    <a href="/?dia=siguiente" {% if dia == 'siguiente' %}class="active"{% endif %}>{{ dias.etiqueta }}</a>
+  <nav class="pestanas" aria-label="Día">
+    <a href="/?dia=hoy"{% if dia == 'hoy' %} aria-current="page"{% endif %}>Hoy</a>
+    <a href="/?dia=siguiente"{% if dia == 'siguiente' %} aria-current="page"{% endif %}>{{ dias.etiqueta }}</a>
   </nav>
 {% endif %}
-<p class="sub center">{{ fecha | fecha_larga }}</p>
+<p class="texto-suave centrado">{{ fecha | fecha_larga }}</p>
 {% if dia == 'hoy' %}
-  <p class="hint">Para hoy se envía una solicitud y el admin tiene que aprobarla.</p>
+  <p class="ayuda">Para hoy se envía una solicitud y el admin tiene que aprobarla.</p>
 {% endif %}
 
 {% if plazas %}
-  <p class="count">{{ plazas | length }} plaza{{ "s" if plazas | length != 1 }} libre{{ "s" if plazas | length != 1 }}</p>
-  <ul class="grid">
+  <p class="recuento">{{ plazas | length }} plaza{{ "s" if plazas | length != 1 }} libre{{ "s" if plazas | length != 1 }}</p>
+  <ul class="rejilla-casillas">
     {% for p in plazas %}
       <li>
-        <a class="spot" href="/reservar/{{ p.id }}?dia={{ dia }}">
-          <span class="num">{{ p.numero }}</span>
-          <span class="action">{{ "Solicitar" if dia == 'hoy' else "Reservar" }}</span>
+        <a class="casilla" href="/reservar/{{ p.id }}?dia={{ dia }}">
+          <span class="casilla-numero">{{ p.numero }}</span>
+          <span class="casilla-accion">{{ "Solicitar" if dia == 'hoy' else "Reservar" }}</span>
         </a>
       </li>
     {% endfor %}
   </ul>
 {% else %}
-  <p class="empty">No quedan plazas libres para este día.</p>
+  <p class="vacio">No quedan plazas libres para este día.</p>
 {% endif %}
 {% endblock %}

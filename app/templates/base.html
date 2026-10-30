@@ -3,32 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#1f6feb">
-  <title>{% block title %}Plazas libres{% endblock %}</title>
+  <meta name="theme-color" content="#1a64d6">
+  <title>{% block title %}Plazas libres{% endblock %} · Garaje</title>
+  <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}?v={{ app_version }}">
   <script src="{{ url_for('static', path='app.js') }}?v={{ app_version }}" defer></script>
 </head>
 <body>
-  <header class="top">
+  <header class="cabecera">
     {% if admin %}
-      <a class="brand" href="/admin">🅿️ Admin</a>
-      <nav>
-        <a href="/admin">Tablero</a>
-        <a href="/admin/solicitudes">Solicitudes{% if pendientes %} <span class="badge">{{ pendientes }}</span>{% endif %}</a>
-        <a href="/admin/avisos">Avisos{% if no_leidos %} <span class="badge">{{ no_leidos }}</span>{% endif %}</a>
-        <a href="/admin/ajustes">Ajustes</a>
-        <form method="post" action="/admin/logout"><button class="link" type="submit">Salir</button></form>
+      <a class="marca" href="/admin"><span aria-hidden="true">🅿️</span> Admin</a>
+      <nav class="cabecera-menu" aria-label="Administración">
+        {% for ruta, texto, cuenta in [("/admin", "Tablero", 0), ("/admin/solicitudes", "Solicitudes", pendientes),
+                                       ("/admin/avisos", "Avisos", no_leidos), ("/admin/ajustes", "Ajustes", 0)] %}
+          <a href="{{ ruta }}"{% if request.url.path == ruta %} aria-current="page"{% endif %}>{{ texto }}{% if cuenta %} <span class="contador">{{ cuenta }}</span>{% endif %}</a>
+        {% endfor %}
       </nav>
+      <form class="cabecera-salir" method="post" action="/admin/logout"><button class="boton-enlace" type="submit">Salir</button></form>
     {% else %}
-      <a class="brand" href="/">🅿️ Garaje</a>
+      <a class="marca" href="/"><span aria-hidden="true">🅿️</span> Garaje</a>
     {% endif %}
   </header>
-  <main class="{% block main_class %}{% endblock %}">
-    {% if msg %}<p class="alert ok">{{ msg }}</p>{% endif %}
-    {% if error %}<p class="alert err">{{ error }}</p>{% endif %}
-    {% for a in alertas or [] %}<p class="alert info">{{ a }}</p>{% endfor %}
+  <main class="contenido {% block contenido_clase %}{% endblock %}">
+    {% if msg %}<p class="alerta alerta-ok" role="status">{{ msg }}</p>{% endif %}
+    {% if error %}<p class="alerta alerta-error" role="alert">{{ error }}</p>{% endif %}
+    {% for a in alertas or [] %}<p class="alerta alerta-info">{{ a }}</p>{% endfor %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="app-footer">Versión v{{ app_version }}</footer>
+  <footer class="pie">Versión v{{ app_version }}</footer>
 </body>
 </html>

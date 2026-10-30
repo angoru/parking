@@ -3,69 +3,70 @@
 {% block content %}
 <h1>Ajustes</h1>
 
-<section class="card">
-  <h2>Plazas <span class="sub">({{ plazas | length }})</span></h2>
-  <form method="post" action="/admin/plazas" class="inline">
-    <input name="numeros" placeholder="Ej.: 12, 15, 20-25" required inputmode="text" aria-label="Números de plaza">
-    <button class="btn primary" type="submit">Añadir</button>
+<section class="tarjeta">
+  <h2>Plazas <span class="texto-suave">({{ plazas | length }})</span></h2>
+  <form method="post" action="/admin/plazas" class="en-linea">
+    <input name="numeros" placeholder="Ej.: 12, 15, 20-25" required aria-label="Números de plaza">
+    <button class="boton boton-primario" type="submit">Añadir</button>
   </form>
-  <p class="hint">Escribe un titular para que la plaza sea <strong>fija</strong>; déjalo vacío para que sea <strong>reservable</strong>. Pulsa ✓ para guardar. Para ceder una fija un día concreto, usa «Liberar este día» en el tablero.</p>
-  <ul class="list">
+  <p class="ayuda">Escribe un titular para que la plaza sea <strong>fija</strong>; déjalo vacío para que sea <strong>reservable</strong>. Pulsa ✓ para guardar. Para ceder una fija un día concreto, usa «Liberar este día» en el tablero.</p>
+  <ul class="lista">
     {% for p in plazas %}
       <li>
-        <form method="post" action="/admin/plazas/{{ p.id }}" class="plaza-row">
-          <input class="num-input" type="number" name="numero" value="{{ p.numero }}" min="0" required aria-label="Número de plaza">
-          <input class="titular {% if p.titular %}fija{% endif %}" name="titular" value="{{ p.titular or '' }}"
-                 placeholder="Reservable" aria-label="Titular (vacío = reservable)"
-                 maxlength="{{ nombre_max }}" data-titular>
-          <button class="btn" type="submit" aria-label="Guardar plaza {{ p.numero }}">✓</button>
-          <button class="btn danger" type="submit" formaction="/admin/plazas/{{ p.id }}/borrar" formnovalidate
+        <form method="post" action="/admin/plazas/{{ p.id }}" class="fila-plaza">
+          <input class="campo-numero" type="number" name="numero" value="{{ p.numero }}" min="0" max="99999" required aria-label="Número de plaza">
+          <input class="campo-titular {% if p.titular %}fija{% endif %}" name="titular" value="{{ p.titular or '' }}"
+                 placeholder="Reservable" aria-label="Titular de la plaza {{ p.numero }} (vacío = reservable)"
+                 maxlength="{{ nombre_max }}" autocomplete="off" data-titular>
+          <button class="boton" type="submit" aria-label="Guardar plaza {{ p.numero }}">✓</button>
+          <button class="boton boton-peligro" type="submit" formaction="/admin/plazas/{{ p.id }}/borrar" formnovalidate
                   data-confirmar="¿Eliminar la plaza {{ p.numero }}?" aria-label="Eliminar plaza {{ p.numero }}">✕</button>
         </form>
       </li>
     {% else %}
-      <li class="empty">No hay plazas. Añade los números de tus plazas arriba.</li>
+      <li class="vacio">No hay plazas. Añade los números de tus plazas arriba.</li>
     {% endfor %}
   </ul>
 </section>
 
-<section class="card">
+<section class="tarjeta">
   <h2>Correo del admin</h2>
-  <p class="hint">Se muestra tras reservar, para quien quiera cancelar.</p>
-  <form method="post" action="/admin/email" class="inline">
-    <input type="email" name="email" value="{{ email }}" placeholder="admin@ejemplo.com" maxlength="254">
-    <button class="btn primary" type="submit">Guardar</button>
+  <p class="ayuda">Se muestra tras reservar, para quien quiera cancelar.</p>
+  <form method="post" action="/admin/email" class="en-linea">
+    <input type="email" name="email" value="{{ email }}" placeholder="admin@ejemplo.com" maxlength="254" autocomplete="email" aria-label="Correo del admin">
+    <button class="boton boton-primario" type="submit">Guardar</button>
   </form>
 </section>
 
-<section class="card">
+<section class="tarjeta">
   <h2>Festivos</h2>
-  <p class="hint">Además de sábados y domingos. La víspera de un festivo se reserva para el siguiente día laborable.</p>
-  <form method="post" action="/admin/festivos" class="inline wrap">
-    <input name="nombre" placeholder="Nombre del festivo" maxlength="{{ texto_max }}" required>
-    <input type="date" name="fecha" required>
-    <button class="btn" type="submit">Añadir</button>
+  <p class="ayuda">Además de sábados y domingos. La víspera de un festivo se reserva para el siguiente día laborable.</p>
+  <form method="post" action="/admin/festivos" class="en-linea en-linea-ajustable">
+    <input class="campo-completo" name="nombre" placeholder="Nombre del festivo" maxlength="{{ texto_max }}" required aria-label="Nombre del festivo">
+    <input type="date" name="fecha" required aria-label="Fecha del festivo">
+    <button class="boton" type="submit">Añadir</button>
   </form>
-  <ul class="list compact">
+  <ul class="lista lista-separada">
     {% for f in festivos %}
-      <li class="row">
-        <div>
+      <li class="fila">
+        <div class="fila-texto">
           <strong>{{ f.fecha | fecha_larga }}</strong>
-          <div class="sub">{{ f.nombre }}</div>
+          <div class="texto-suave">{{ f.nombre }}</div>
         </div>
         <form method="post" action="/admin/festivos/{{ f.fecha }}/borrar">
-          <button class="btn danger" type="submit" aria-label="Eliminar festivo">✕</button>
+          <button class="boton boton-peligro" type="submit" data-confirmar="¿Eliminar el festivo {{ f.nombre }}?"
+                  aria-label="Eliminar festivo: {{ f.nombre }}">✕</button>
         </form>
       </li>
     {% else %}
-      <li class="empty">No hay festivos próximos.</li>
+      <li class="vacio">No hay festivos próximos.</li>
     {% endfor %}
   </ul>
 </section>
 
-<section class="card">
+<section class="tarjeta">
   <h2>Seguridad</h2>
-  <p class="hint">Al cambiar la contraseña se cierran las sesiones abiertas en otros dispositivos.</p>
-  <a class="btn" href="/admin/password">Cambiar contraseña</a>
+  <p class="ayuda">Al cambiar la contraseña se cierran las sesiones abiertas en otros dispositivos.</p>
+  <a class="boton" href="/admin/password">Cambiar contraseña</a>
 </section>
 {% endblock %}

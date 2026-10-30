@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Versión** | 1.11 |
+| **Versión** | 1.12 |
 | **Estado** | ✅ Implementado · quedan preguntas abiertas (§12) |
 | **Última revisión** | 30/10/2026 |
-| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (109 casos, todos en verde) · despliegue en `DEPLOY.md` |
+| **Código** | `app/` · tests en `tests/test_app.py`, `tests/test_seguridad.py` y `tests/test_frontend.py` (131 casos, todos en verde) · despliegue en `DEPLOY.md` |
 
 **Leyenda de estado:** ✅ Implementado · 🟡 Parcial · ⬜ Pendiente
 
@@ -193,7 +193,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 
 | ID | Requisito | Estado |
 |---|---|---|
-| RNF-01 | Diseño **pensado primero para el móvil**: botones grandes y formularios que no fuerzan el zoom. Comprobado a 390 px de ancho. Modo oscuro automático. | ✅ |
+| RNF-01 | Diseño **pensado primero para el móvil**: botones grandes y formularios que no fuerzan el zoom. Comprobado a 320 y 390 px de ancho y en escritorio, con nombres de 60 caracteres. Modo oscuro automático, con contraste AA. Navegable con teclado y lector de pantalla (auditoría con axe sin incidencias). | ✅ |
 | RNF-02 | Sin JavaScript de terceros en el navegador. Páginas ligeras generadas en el servidor. | ✅ |
 | RNF-03 | Datos guardados en **SQLite**, en un único archivo (`PARKING_DB`). | ✅ |
 | RNF-04 | **Sesiones del admin revocables:** token aleatorio en una cookie `HttpOnly` y `SameSite=Lax`, del que la base de datos solo guarda el hash. «Salir» invalida la sesión en el servidor, y cambiar la contraseña cierra las demás sesiones. La contraseña se guarda con *scrypt* (mínimo 10 caracteres). | ✅ |
@@ -201,7 +201,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | RNF-06 | **HTTPS** en producción. La app lo detecta detrás de un proxy (Caddy u otro): marca las cookies como `Secure` y envía HSTS. Configurada para un servidor: Caddy con certificado, y Uvicorn con `--proxy-headers` en el `Dockerfile` (ver `DEPLOY.md`). | ✅ Comprobada el 30/10/2026: en producción, redirección de HTTP a HTTPS y HSTS; con la imagen y el Caddy del repositorio, cookies `Secure` e IP real (no se puede falsear con `X-Forwarded-For`) |
 | RNF-07 | **Límites anti-abuso por IP:** 5 intentos de login fallidos cada 15 minutos, y 5 reservas o solicitudes por hora **por dispositivo** (`RESERVAS_POR_HORA`), con un tope de 60 por hora **por IP** (`RESERVAS_POR_HORA_IP`) para que una oficina que sale por la misma IP no se bloquee. Al superarlos se responde 429. | ✅ |
 | RNF-08 | **Validación de entradas:** nombres de 60 caracteres como máximo y sin caracteres de control; números de plaza entre 0 y 99999; correo del admin con formato válido. | ✅ |
-| RNF-09 | **Cabeceras de seguridad:** `Content-Security-Policy` sin scripts en línea, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel del admin. Sin documentación pública de la API (`/docs`). | ✅ |
+| RNF-09 | **Cabeceras de seguridad:** `Content-Security-Policy` sin scripts ni estilos en línea, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel del admin. Sin documentación pública de la API (`/docs`). | ✅ |
 | RNF-10 | Los **mensajes** tras una acción, incluida la confirmación de reserva, viajan en una cookie de un solo uso y no en la URL, así que no se pueden fabricar enlaces con textos falsos. | ✅ |
 | RNF-11 | **Concurrencia:** varias reservas simultáneas no dan errores ni bloquean la base de datos. Se usa SQLite en modo WAL, con espera si está ocupada y transacción inmediata al reservar. La transacción se confirma **antes** de responder: nunca se muestra «Has reservado» sin que la reserva esté guardada. | ✅ |
 | RNF-12 | **Software al día:** dependencias directas con versión fijada y acciones de CI fijadas por commit, que Dependabot propone actualizar. Python, Debian y las dependencias indirectas se actualizan solos con una reconstrucción y un despliegue semanales. `pip-audit` avisa de vulnerabilidades conocidas. Si la imagen nueva no arranca, se vuelve a la anterior. | ✅ |
@@ -248,6 +248,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | 1.9 | 30/10/2026 | **Repaso general y de seguridad**: la transacción se confirma antes de responder; rechazo de POST de otros orígenes; las cookies inventadas ya no llenan la memoria del servidor; sin errores 500 con identificadores o fechas extremas, números de plaza raros ni al repetir una reserva creada por el admin; no se puede devolver una fija en un día pasado; Avisos resalta los no leídos reales; contenedor endurecido y acciones de CI fijadas por commit; la limpieza de copias antiguas de restic vuelve a funcionar; procedimiento de restauración documentado. Nuevas preguntas P-13 a P-16. |
 | 1.10 | 30/10/2026 | **Python 3.14** y **actualizaciones automáticas**: reconstrucción y despliegue semanales, auditoría de dependencias en cada ejecución y vuelta a la imagen anterior si la nueva no arranca. |
 | 1.11 | 30/10/2026 | **Releases**: subir a `main` ya no despliega; a producción llegan las releases de GitHub, y la reconstrucción semanal parte de la última. Se documenta cómo desplegar en otro servidor. |
+| 1.12 | 30/10/2026 | **Repaso del frontend**: el tablero ya no se desborda en el móvil con nombres largos, que además se muestran enteros; contraste AA en los dos modos; foco visible, objetivos táctiles de 44 px y estructura accesible; rechazar una solicitud o borrar un festivo piden confirmación; CSS reorganizado con nombres coherentes y variables; CSP sin `unsafe-inline`. |
 
 ---
 

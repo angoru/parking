@@ -45,7 +45,7 @@ def hoy_es(monkeypatch, d: date):
 def libres(client, dia="siguiente"):
     html = client.get("/", params={"dia": dia}).text
     # Números visibles de las plazas libres (no el id interno de la plaza)
-    return sorted(int(n) for n in re.findall(r'<span class="num">(\d+)</span>', html))
+    return sorted(int(n) for n in re.findall(r'<span class="casilla-numero">(\d+)</span>', html))
 
 
 def dia_permitido(tipo):
@@ -119,7 +119,7 @@ def test_siguiente_laborable(client, monkeypatch, hoy, esperado, etiqueta):
         assert f">{etiqueta}</a>" in html
     r = reservar(client, 1)
     assert r.url.path == "/confirmacion"
-    assert re.search(r'<p class="sub">[^<]*\b%d de ' % esperado.day, r.text)
+    assert re.search(r'<p class="texto-suave">[^<]*\b%d de ' % esperado.day, r.text)
 
 
 def test_no_laborable_sin_pestana_hoy(client, monkeypatch):
@@ -186,7 +186,7 @@ def test_solicitud_hoy_no_ocupa_hasta_aprobar(admin):
     assert "Has solicitado la plaza 2" in solicitar(admin, 2, nombre="Marta").text
     assert 2 in libres(admin, "hoy")
     assert len(solicitud_ids(admin)) == 1
-    assert 'Solicitudes <span class="badge">1</span>' in admin.get("/admin").text
+    assert 'Solicitudes <span class="contador">1</span>' in admin.get("/admin").text
 
 
 def test_aprobar_solicitud(admin):
@@ -220,13 +220,13 @@ def test_tablero_muestra_todas(admin):
     hacer_nominal(admin, 1, "Luis")
     reservar(admin, 2, nombre="Marta")
     html = admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
-    assert html.count('<li class="spot-card ') == 5
-    assert 'spot-card nominal' in html and "Luis" in html
-    assert 'spot-card reservada' in html and "Marta" in html
+    assert html.count('<li class="plaza ') == 5
+    assert 'plaza plaza-fija' in html and "Luis" in html
+    assert 'plaza plaza-reservada' in html and "Marta" in html
 
 
 def kpi(html, etiqueta):
-    m = re.search(etiqueta + r'</span>\s*<span class="kpi-value">(\d+)</span>', html)
+    m = re.search(etiqueta + r'</span>\s*<span class="indicador-valor">(\d+)</span>', html)
     return int(m.group(1))
 
 
@@ -239,7 +239,7 @@ def test_tablero_resumen_y_filtros(admin):
     assert "2 de 5 · 40 %" in html
     def visibles(ver):
         h = admin.get("/admin", params={"fecha": JUEVES.isoformat(), "ver": ver}).text
-        return sorted(int(n) for n in re.findall(r'<span class="spot-num">(\d+)</span>', h))
+        return sorted(int(n) for n in re.findall(r'<span class="plaza-numero">(\d+)</span>', h))
     assert visibles("libres") == [3, 4, 5]
     assert visibles("ocupadas") == [1, 2]
     assert visibles("fijas") == [1]
@@ -305,17 +305,17 @@ def test_ocupar_y_liberar_reservable(admin):
 def test_cada_reserva_avisa_al_admin(admin):
     reservar(admin, 3, nombre="Lucía")
     solicitar(admin, 4, nombre="Raúl")
-    assert 'Avisos <span class="badge">2</span>' in admin.get("/admin").text
+    assert 'Avisos <span class="contador">2</span>' in admin.get("/admin").text
     html = admin.get("/admin/avisos").text
     assert "Lucía ha reservado la plaza 3" in html
     assert "Raúl solicita la plaza 4 para hoy" in html
-    assert 'Avisos <span class="badge">' not in admin.get("/admin").text
+    assert 'Avisos <span class="contador">' not in admin.get("/admin").text
 
 
 def test_acciones_del_admin_quedan_en_el_historial_sin_avisar(admin):
     # Lo que hace el propio admin no sube el contador, pero queda constancia
     admin.post("/admin/plazas/1/ocupar", data={"fecha": MIERCOLES.isoformat(), "nombre": "Visita"})
-    assert 'Avisos <span class="badge">' not in admin.get("/admin").text
+    assert 'Avisos <span class="contador">' not in admin.get("/admin").text
     assert "Admin asignó la plaza 1 a Visita para hoy" in admin.get("/admin/avisos").text
 
 
@@ -355,7 +355,7 @@ def test_anadir_plazas_con_numeros_sueltos_y_rangos(admin):
 
 def plaza_id(admin, numero):
     html = admin.get("/admin/ajustes").text
-    return int(re.search(r'action="/admin/plazas/(\d+)" class="plaza-row">\s*<input[^>]*value="%d"' % numero, html).group(1))
+    return int(re.search(r'action="/admin/plazas/(\d+)" class="fila-plaza">\s*<input[^>]*value="%d"' % numero, html).group(1))
 
 
 def test_renumerar_plaza(admin):
@@ -462,7 +462,7 @@ def test_liberar_reserva_pide_confirmacion_y_queda_en_historial(admin):
     html = admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
     assert 'data-confirmar="¿Anular la reserva de Ana en la plaza 1?' in html
     admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
-    assert 'Avisos <span class="badge">' not in admin.get("/admin").text
+    assert 'Avisos <span class="contador">' not in admin.get("/admin").text
     assert "Admin anuló la reserva de Ana en la plaza 1 para mañana" in admin.get("/admin/avisos").text
 
 
@@ -596,8 +596,8 @@ def test_avisos_resalta_los_no_leidos_y_no_las_acciones_del_admin(admin):
     reservar(admin, 1, "Luz")
     admin.post("/admin/plazas/1/liberar", data={"fecha": JUEVES.isoformat()})
     html = admin.get("/admin/avisos").text
-    tarjetas = re.findall(r'<li class="card aviso ([a-z]*)">\s*<div>(.*?)</div>', html)
-    assert [clase for clase, _ in tarjetas] == ["", "nuevo"]
+    tarjetas = re.findall(r'<li class="tarjeta aviso( aviso-nuevo)?">\s*<div>(.*?)</div>', html)
+    assert [bool(clase) for clase, _ in tarjetas] == [False, True]
     assert "Luz ha reservado" in tarjetas[1][1]
 
 

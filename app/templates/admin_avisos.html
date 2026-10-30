@@ -2,18 +2,18 @@
 {% block title %}Avisos{% endblock %}
 {% block content %}
 <h1>Avisos</h1>
-<p class="sub">Reservas y solicitudes de los usuarios, y lo que ha hecho el admin.</p>
+<p class="texto-suave">Reservas y solicitudes de los usuarios, y lo que ha hecho el admin.</p>
 
 {% if avisos %}
-  <ul class="list">
+  <ul class="lista">
     {% for a in avisos %}
-      <li class="card aviso {% if not a.leido %}nuevo{% endif %}">
+      <li class="tarjeta aviso{% if not a.leido %} aviso-nuevo{% endif %}">
         <div>{{ a.texto }}</div>
-        <div class="sub">{{ a.creado_en[:16] | replace("T", " ") }}</div>
+        <div class="texto-suave">{{ a.creado_en[:16] | replace("T", " ") }}</div>
       </li>
     {% endfor %}
   </ul>
 {% else %}
-  <p class="empty">Todavía no hay avisos.</p>
+  <p class="vacio">Todavía no hay avisos.</p>
 {% endif %}
 {% endblock %}
