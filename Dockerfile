@@ -1,4 +1,6 @@
-FROM python:3.12-slim
+# Etiqueta libre dentro de 3.14: cada reconstrucción (semanal, ver deploy.yml) recoge los
+# parches de Python y de Debian. Pasar a otra versión menor se decide y se prueba a mano.
+FROM python:3.14-slim
 
 LABEL org.opencontainers.image.source="https://github.com/angoru/parking"
 

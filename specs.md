@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Versión** | 1.8 |
+| **Versión** | 1.11 |
 | **Estado** | ✅ Implementado · quedan preguntas abiertas (§12) |
-| **Última revisión** | 16/10/2026 |
-| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (86 casos, todos en verde) · despliegue en `DEPLOY.md` |
+| **Última revisión** | 30/10/2026 |
+| **Código** | `app/` · tests en `tests/test_app.py` y `tests/test_seguridad.py` (109 casos, todos en verde) · despliegue en `DEPLOY.md` |
 
 **Leyenda de estado:** ✅ Implementado · 🟡 Parcial · ⬜ Pendiente
 
@@ -183,6 +183,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | Reservar o solicitar | `/reservar/{plaza}` | Usuario |
 | Confirmación | `/confirmacion` | Usuario |
 | Acceso admin | `/admin/login` | Admin |
+| Cambiar contraseña (obligatorio la primera vez) | `/admin/password` | Admin |
 | Tablero de ocupación | `/admin` | Admin |
 | Solicitudes pendientes | `/admin/solicitudes` | Admin |
 | Avisos | `/admin/avisos` | Admin |
@@ -197,15 +198,18 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | RNF-03 | Datos guardados en **SQLite**, en un único archivo (`PARKING_DB`). | ✅ |
 | RNF-04 | **Sesiones del admin revocables:** token aleatorio en una cookie `HttpOnly` y `SameSite=Lax`, del que la base de datos solo guarda el hash. «Salir» invalida la sesión en el servidor, y cambiar la contraseña cierra las demás sesiones. La contraseña se guarda con *scrypt* (mínimo 10 caracteres). | ✅ |
 | RNF-05 | Tests automáticos que cubren todas las reglas anteriores, con la fecha de "hoy" fijada para probar fines de semana y festivos. | ✅ |
-| RNF-06 | **HTTPS** en producción. La app lo detecta detrás de un proxy (Caddy u otro): marca las cookies como `Secure` y envía HSTS. Configurada para un servidor: Caddy con certificado, y Uvicorn con `--proxy-headers` en el `Dockerfile` (ver `DEPLOY.md`). | 🟡 Configurada; falta comprobarla tras el primer despliegue |
+| RNF-06 | **HTTPS** en producción. La app lo detecta detrás de un proxy (Caddy u otro): marca las cookies como `Secure` y envía HSTS. Configurada para un servidor: Caddy con certificado, y Uvicorn con `--proxy-headers` en el `Dockerfile` (ver `DEPLOY.md`). | ✅ Comprobada el 30/10/2026: en producción, redirección de HTTP a HTTPS y HSTS; con la imagen y el Caddy del repositorio, cookies `Secure` e IP real (no se puede falsear con `X-Forwarded-For`) |
 | RNF-07 | **Límites anti-abuso por IP:** 5 intentos de login fallidos cada 15 minutos, y 5 reservas o solicitudes por hora **por dispositivo** (`RESERVAS_POR_HORA`), con un tope de 60 por hora **por IP** (`RESERVAS_POR_HORA_IP`) para que una oficina que sale por la misma IP no se bloquee. Al superarlos se responde 429. | ✅ |
 | RNF-08 | **Validación de entradas:** nombres de 60 caracteres como máximo y sin caracteres de control; números de plaza entre 0 y 99999; correo del admin con formato válido. | ✅ |
 | RNF-09 | **Cabeceras de seguridad:** `Content-Security-Policy` sin scripts en línea, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` y `no-store` en el panel del admin. Sin documentación pública de la API (`/docs`). | ✅ |
 | RNF-10 | Los **mensajes** tras una acción, incluida la confirmación de reserva, viajan en una cookie de un solo uso y no en la URL, así que no se pueden fabricar enlaces con textos falsos. | ✅ |
-| RNF-11 | **Concurrencia:** varias reservas simultáneas no dan errores ni bloquean la base de datos. Se usa SQLite en modo WAL, con espera si está ocupada y transacción inmediata al reservar. | ✅ |
-| RNF-12 | Dependencias con **versión fijada** (`requirements.txt` y `requirements-dev.txt`). | ✅ |
+| RNF-11 | **Concurrencia:** varias reservas simultáneas no dan errores ni bloquean la base de datos. Se usa SQLite en modo WAL, con espera si está ocupada y transacción inmediata al reservar. La transacción se confirma **antes** de responder: nunca se muestra «Has reservado» sin que la reserva esté guardada. | ✅ |
+| RNF-12 | **Software al día:** dependencias directas con versión fijada y acciones de CI fijadas por commit, que Dependabot propone actualizar. Python, Debian y las dependencias indirectas se actualizan solos con una reconstrucción y un despliegue semanales. `pip-audit` avisa de vulnerabilidades conocidas. Si la imagen nueva no arranca, se vuelve a la anterior. | ✅ |
+| RNF-15 | **Despliegue por releases:** a producción solo llegan releases de GitHub `vX.Y.Z` cuya versión coincida con `VERSION`. Se puede volver a una release anterior, y el despliegue se puede llevar a otro servidor (`DEPLOY.md`). | ✅ |
+| RNF-13 | **CSRF:** además de `SameSite=Lax`, se rechaza con 403 cualquier POST cuyo `Origin` no coincida con el `Host`. El proxy debe conservar el `Host`. | ✅ |
+| RNF-14 | **Contenedor endurecido:** usuario sin privilegios, sistema de archivos de solo lectura salvo `/data`, sin *capabilities* y con `no-new-privileges`. | ✅ |
 
-**Stack:** Python 3 · FastAPI · Jinja2 · SQLite. Las instrucciones de arranque están en el [README](README.md).
+**Stack:** Python 3.14 · FastAPI · Jinja2 · SQLite. Las instrucciones de arranque están en el [README](README.md).
 
 ## 12. Preguntas abiertas y próximos pasos
 
@@ -217,12 +221,16 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | P-04 | **Hora de apertura y cierre** para reservar el siguiente día laborable | Se puede reservar desde las 00:00 del día anterior hasta las 23:59: gana quien reserve justo después de medianoche. | ¿Fijar una hora de apertura (por ejemplo, las 18:00 del día anterior) o de cierre? |
 | P-05 | **Autogestión del titular** | Solo el admin puede liberar una plaza fija. | Permitir que el titular la ceda él mismo. |
 | P-06 | **Histórico** | Las reservas pasadas se guardan, pero no se pueden consultar. | Añadir una pantalla de histórico o una exportación a CSV. |
-| P-07 | **Despliegue** | Preparado en un servidor: imagen Docker en GHCR, Caddy, copias cifradas en almacenamiento externo y CI/CD con GitHub Actions (`DEPLOY.md`). | Activar `DEPLOY_ENABLED`, hacer el primer despliegue y comprobar RNF-06. |
+| P-07 | ~~Despliegue~~ | **Resuelto:** funciona en un servidor con imagen Docker en GHCR, Caddy, copias cifradas en almacenamiento externo y CI/CD con GitHub Actions; se despliega con cada release (`DEPLOY.md`). | — |
 | P-08 | **Festivos de 2028** | Hay festivos cargados hasta 2027. Desde noviembre de 2027 el panel avisa de que faltan (RF-20). | Añadirlos en Ajustes cuando se publiquen (BOCM, octubre a diciembre de 2027). |
 | P-09 | **Fija cedida para hoy** | Si el admin cede hoy una plaza fija, quien la quiera aún tiene que solicitarla y el admin aprobarla otra vez (RN-06b). | ¿Reserva directa cuando es el propio admin quien la ha cedido? |
 | P-10 | **Cancelar sin correo** | Para cancelar hay que escribir al admin. | Con el código de RF-08, quien reservó podría cancelar desde su propio dispositivo. |
 | P-11 | **Un solo admin** | Si el admin no está, nadie aprueba solicitudes ni anula reservas. | ¿Un segundo admin o un suplente? |
 | P-12 | **Borrar una plaza** | Al eliminarla se borran también sus reservas pasadas. | Conservar el historial (relacionado con P-06). |
+| P-13 | **Reservas de desconocidos** | Cualquiera con la URL puede reservar con cualquier nombre: el límite es de 60 por hora e IP, y la URL aparece en los registros públicos de certificados. | ¿Un código común del garaje, que se pide una vez por dispositivo? No serían cuentas, pero añade un paso. |
+| P-14 | **Despliegue como `root`** | La clave SSH de GitHub Actions entra como `root` en un servidor compartido con otros proyectos. | Usuario propio con acceso solo a Docker y `/opt/app`. Docker sigue dando mucho poder: también se puede limitar lo que esa clave ejecuta. |
+| P-15 | **Dependencias indirectas** | Sin fijar a propósito, para recibir parches sin intervención (RNF-12). A cambio, una versión maliciosa llegaría a producción sin revisión y las construcciones no son reproducibles. | Si este riesgo llega a pesar más: fichero de bloqueo con hashes, actualizado por Dependabot y con los PR fusionados a mano. |
+| P-16 | **Conservación de datos personales** | Los nombres se guardan indefinidamente en `reservas` y `avisos`, y en las copias hasta 12 meses. | Decidir un plazo (por ejemplo, 12 meses) y borrar lo anterior de forma automática. Relacionado con P-06. |
 
 ## 13. Historial de versiones
 
@@ -237,6 +245,9 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | 1.6 | 16/10/2026 | **Seguridad** (tras el análisis de seguridad): corregido el bloqueo de la base de datos con reservas simultáneas; cambio obligatorio de la contraseña de fábrica; límite de intentos de login y de reservas por IP; validación de nombres; sesiones revocables; cookies `Secure` y HSTS bajo HTTPS; cabeceras de seguridad y CSP; sin `/docs`; mensajes fuera de la URL; dependencias fijadas. |
 | 1.7 | 16/10/2026 | **Despliegue**: contenedor Docker, Caddy con HTTPS, copias cifradas, CI/CD, `/health/` y versión visible al pie. La contraseña inicial del admin puede venir de un archivo secreto (`ADMIN_PASSWORD_FILE`). |
 | 1.8 | 16/10/2026 | **Repaso funcional**: no se reserva otro día si se pasa la medianoche con el formulario abierto; doble toque en «Confirmar» o «Aprobar» sin errores ni estados incorrectos; nombres iguales sin distinguir tildes; límite de reservas por dispositivo (una oficina con la misma IP ya no se bloquea); «Liberar» pide confirmación y el admin deja historial; «En este dispositivo» con el estado de reservas y solicitudes (resuelve P-02); avisos de configuración pendiente; no se renumeran plazas con reservas futuras; restablecimiento de la contraseña del admin; sin plazas de ejemplo en producción. Nuevas preguntas P-09 a P-12. |
+| 1.9 | 30/10/2026 | **Repaso general y de seguridad**: la transacción se confirma antes de responder; rechazo de POST de otros orígenes; las cookies inventadas ya no llenan la memoria del servidor; sin errores 500 con identificadores o fechas extremas, números de plaza raros ni al repetir una reserva creada por el admin; no se puede devolver una fija en un día pasado; Avisos resalta los no leídos reales; contenedor endurecido y acciones de CI fijadas por commit; la limpieza de copias antiguas de restic vuelve a funcionar; procedimiento de restauración documentado. Nuevas preguntas P-13 a P-16. |
+| 1.10 | 30/10/2026 | **Python 3.14** y **actualizaciones automáticas**: reconstrucción y despliegue semanales, auditoría de dependencias en cada ejecución y vuelta a la imagen anterior si la nueva no arranca. |
+| 1.11 | 30/10/2026 | **Releases**: subir a `main` ya no despliega; a producción llegan las releases de GitHub, y la reconstrucción semanal parte de la última. Se documenta cómo desplegar en otro servidor. |
 
 ---
 
