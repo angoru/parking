@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 import pytest
@@ -40,6 +40,10 @@ def admin(client):
 
 def hoy_es(monkeypatch, d: date):
     monkeypatch.setattr(calendario, "hoy", lambda: d)
+
+
+def son_las(monkeypatch, hora: time):
+    monkeypatch.setattr(calendario, "hora_actual", lambda: hora)
 
 
 def libres(client, dia="siguiente"):
@@ -135,6 +139,89 @@ def test_admin_puede_anadir_festivo(admin):
     assert "Fiesta inventada" in admin.get("/admin", params={"fecha": JUEVES.isoformat()}).text
     admin.post(f"/admin/festivos/{JUEVES.isoformat()}/borrar")
     assert "Mañana, jueves 15 de octubre" in reservar(admin, 2, nombre="Otro").text
+
+
+# --- Hora de apertura de las reservas -----------------------------------------
+
+def test_no_se_reserva_antes_de_la_hora_de_apertura(client, monkeypatch):
+    son_las(monkeypatch, time(7, 59))
+    html = client.get("/").text
+    assert "Las reservas para este día se abren hoy a las 08:00." in html
+    assert libres(client) == []
+    assert "se abren hoy a las 08:00" in reservar(client, 1).text
+    assert contar("SELECT COUNT(*) FROM reservas") == 0
+    # Un enlace guardado a la plaza lleva al inicio, que explica cuándo se abren
+    r = client.get("/reservar/1")
+    assert r.url.path == "/" and "se abren hoy a las 08:00" in r.text
+
+
+def test_se_reserva_desde_la_hora_de_apertura_exacta(client, monkeypatch):
+    son_las(monkeypatch, time(8, 0))
+    assert "se abren hoy" not in client.get("/").text
+    assert libres(client) == [1, 2, 3, 4, 5]
+    assert client.get("/reservar/1").url.path == "/reservar/1"
+    assert "Has reservado la plaza 1" in reservar(client, 1).text
+
+
+def test_la_solicitud_para_hoy_no_espera_a_la_apertura(client, monkeypatch):
+    son_las(monkeypatch, time(7, 0))
+    assert libres(client, "hoy") == [1, 2, 3, 4, 5]
+    assert client.get("/reservar/1", params={"dia": "hoy"}).url.path == "/reservar/1"
+    assert "Has solicitado la plaza 1" in solicitar(client, 1).text
+
+
+def test_el_viernes_se_abren_las_del_lunes(client, monkeypatch):
+    hoy_es(monkeypatch, date(2026, 10, 16))
+    son_las(monkeypatch, time(7, 0))
+    assert libres(client) == []
+    son_las(monkeypatch, time(8, 0))
+    assert libres(client) == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.parametrize("hoy", [
+    date(2026, 10, 17),  # sábado
+    date(2026, 10, 18),  # domingo
+    date(2026, 10, 12),  # lunes festivo
+], ids=["sabado", "domingo", "festivo"])
+def test_en_dias_no_laborables_sigue_abierta(client, monkeypatch, hoy):
+    # Se abrió el último día laborable: no se cierra de madrugada para volver a abrirse a las 8
+    hoy_es(monkeypatch, hoy)
+    son_las(monkeypatch, time(0, 30))
+    assert libres(client) == [1, 2, 3, 4, 5]
+    assert "Has reservado la plaza 1" in reservar(client, 1).text
+
+
+def test_el_admin_cambia_la_hora_de_apertura(admin, monkeypatch):
+    assert 'name="hora" value="08:00"' in admin.get("/admin/ajustes").text
+    assert "Las reservas se abrirán a las 18:30" in admin.post("/admin/apertura", data={"hora": "18:30"}).text
+    assert 'name="hora" value="18:30"' in admin.get("/admin/ajustes").text
+    son_las(monkeypatch, time(18, 29))
+    assert "se abren hoy a las 18:30" in admin.get("/").text
+    son_las(monkeypatch, time(18, 30))
+    assert libres(admin) == [1, 2, 3, 4, 5]
+
+
+def test_con_las_0000_se_reserva_a_cualquier_hora(admin, monkeypatch):
+    admin.post("/admin/apertura", data={"hora": "00:00"})
+    son_las(monkeypatch, time(0, 0))
+    assert "Has reservado la plaza 1" in reservar(admin, 1).text
+
+
+@pytest.mark.parametrize("hora", ["", "24:00", "8:00", "08:60", "08:00:00", "٠٨:٠٠", "<b>"])
+def test_hora_de_apertura_no_valida(admin, hora):
+    assert "Escribe una hora válida" in admin.post("/admin/apertura", data={"hora": hora}).text
+    assert 'name="hora" value="08:00"' in admin.get("/admin/ajustes").text
+
+
+def test_cambiar_la_hora_de_apertura_requiere_admin(client):
+    r = client.post("/admin/apertura", data={"hora": "00:00"}, follow_redirects=False)
+    assert r.headers["location"] == "/admin/login"
+
+
+def test_el_admin_ocupa_plazas_antes_de_la_apertura(admin, monkeypatch):
+    son_las(monkeypatch, time(7, 0))
+    r = admin.post("/admin/plazas/1/ocupar", data={"fecha": JUEVES.isoformat(), "nombre": "Visita"})
+    assert "Plaza ocupada" in r.text
 
 
 # --- Público ---------------------------------------------------------------

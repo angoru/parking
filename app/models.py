@@ -2,7 +2,7 @@ import re
 import secrets
 import sqlite3
 import unicodedata
-from datetime import date
+from datetime import date, time
 
 from . import calendario, db
 
@@ -10,6 +10,8 @@ NOMBRE_MAX = 60
 NUMERO_MAX = 99999
 TEXTO_MAX = 80
 NUMERO_RE = re.compile(r"[0-9]{1,5}")
+HORA_RE = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
+HORA_APERTURA_DEFECTO = "08:00"
 
 
 def _hoy() -> str:
@@ -49,6 +51,18 @@ def set_config(conn: sqlite3.Connection, key: str, value: str) -> None:
         "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+
+
+def hora_apertura(conn: sqlite3.Connection) -> time:
+    """Hora a partir de la cual se puede reservar para el siguiente día laborable."""
+    return time.fromisoformat(get_config(conn, "hora_apertura") or HORA_APERTURA_DEFECTO)
+
+
+def guardar_hora_apertura(conn: sqlite3.Connection, hora: str) -> str | None:
+    if not HORA_RE.fullmatch(hora):
+        return "Escribe una hora válida, por ejemplo: 08:00."
+    set_config(conn, "hora_apertura", hora)
+    return None
 
 
 def parse_numeros(texto: str) -> list[int] | None:

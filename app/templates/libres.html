@@ -34,7 +34,9 @@
   <p class="ayuda">Para hoy se envía una solicitud y el admin tiene que aprobarla.</p>
 {% endif %}
 
-{% if plazas %}
+{% if dia == 'siguiente' and not dias.abierta %}
+  <p class="vacio">Las reservas para este día se abren hoy a las {{ dias.apertura }}.</p>
+{% elif plazas %}
   <p class="recuento">{{ plazas | length }} plaza{{ "s" if plazas | length != 1 }} libre{{ "s" if plazas | length != 1 }}</p>
   <ul class="rejilla-casillas">
     {% for p in plazas %}

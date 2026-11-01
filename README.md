@@ -3,7 +3,7 @@
 Aplicación web, pensada para el móvil, para repartir las plazas de un garaje compartido. Quien necesita aparcar abre la página, elige una plaza libre, escribe su nombre y ya está: no hay cuentas. Un administrador controla la ocupación desde un panel.
 
 - Cada plaza es **reservable** o **fija** (de un titular, que el admin puede ceder un día concreto).
-- Se reserva directamente para el **siguiente día laborable**: el viernes, para el lunes; los festivos también se saltan.
+- Se reserva directamente para el **siguiente día laborable**: el viernes, para el lunes; los festivos también se saltan. Las reservas se abren a la hora que fija el admin (por defecto, las 08:00).
 - Para **hoy** se envía una solicitud, que el admin aprueba o rechaza.
 - Para cancelar, se escribe al admin.
 
@@ -98,7 +98,7 @@ app/
   main.py                  Rutas, cookies, cabeceras de seguridad. Sin SQL.
   models.py                Reglas de negocio y todas las consultas SQL.
   seguridad.py             Contraseña, sesiones, límites de intentos, mensajes de un solo uso.
-  calendario.py            Festivos y días laborables. calendario.hoy() es la única fuente de «hoy».
+  calendario.py            Festivos y días laborables. calendario.hoy() y hora_actual() son la única fuente de la fecha y la hora.
   db.py                    Esquema, conexión y migraciones.
   restablecer_password.py  Recuperar el acceso si se olvida la contraseña.
   templates/  static/      Páginas Jinja2, CSS y un único app.js propio.
@@ -123,13 +123,13 @@ Dockerfile  compose.yaml   Imagen de la app y arranque con un solo comando.
 | `festivos` | Días no laborables, además de sábados y domingos |
 | `avisos` | Historial que ve el admin |
 | `sesiones` | Sesiones del admin (solo el hash del token) |
-| `config` | Contraseña del admin (hash *scrypt*), su correo e indicadores internos |
+| `config` | Contraseña del admin (hash *scrypt*), su correo, la hora de apertura e indicadores internos |
 
 ### Convenciones que conviene respetar
 
 - **`nominal` en el código es «fija» en la interfaz.** El código y la interfaz están en español.
 - **Comprobar y escribir, siempre con bloqueo.** Toda función que compruebe algo y luego escriba empieza por `_bloquear_escritura(conn)`, porque hay peticiones simultáneas.
-- **Nunca `date.today()`.** Usa `calendario.hoy()`, que va en hora de Madrid y que los tests pueden fijar.
+- **Nunca `date.today()` ni `datetime.now()`.** Usa `calendario.hoy()` y `calendario.hora_actual()`, que van en hora de Madrid y que los tests pueden fijar.
 - **Nada de JavaScript ni CSS en línea.** Ni `<script>`, `onclick` o `style=`: la CSP lo bloquea y un test lo comprueba. El comportamiento va en `app.js` y los estilos, en `style.css`.
 - **CSS:** clases en español y en kebab-case, con el patrón `componente` y `componente-parte` o `componente-variante`. Colores, tamaños de letra y radios salen de las variables de `:root`. `tests/test_frontend.py` comprueba todo esto, además de que no sobren clases ni variables y de que cada página tenga un `h1` y sus campos, nombre accesible.
 - **Los mensajes no van en la URL.** Usa `redirect(path, msg=...)`, que los manda en una cookie de un solo uso.

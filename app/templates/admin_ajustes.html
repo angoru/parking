@@ -30,6 +30,15 @@
 </section>
 
 <section class="tarjeta">
+  <h2>Apertura de reservas</h2>
+  <p class="ayuda">Hora a partir de la cual se puede reservar para el siguiente día laborable. El viernes se abren las del lunes y siguen abiertas todo el fin de semana. Con 00:00 se puede reservar a cualquier hora.</p>
+  <form method="post" action="/admin/apertura" class="en-linea">
+    <input type="time" name="hora" value="{{ apertura }}" required aria-label="Hora de apertura de las reservas">
+    <button class="boton boton-primario" type="submit">Guardar</button>
+  </form>
+</section>
+
+<section class="tarjeta">
   <h2>Correo del admin</h2>
   <p class="ayuda">Se muestra tras reservar, para quien quiera cancelar.</p>
   <form method="post" action="/admin/email" class="en-linea">

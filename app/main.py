@@ -190,10 +190,16 @@ def dias_usuario(conn) -> dict:
     """Hoy (con solicitud, solo si es laborable) y el siguiente día laborable (reserva directa)."""
     hoy = calendario.hoy()
     siguiente = calendario.siguiente_laborable(conn, hoy)
+    laborable = calendario.es_laborable(conn, hoy)
+    apertura = models.hora_apertura(conn)
     return {
-        "hoy": hoy if calendario.es_laborable(conn, hoy) else None,
+        "hoy": hoy if laborable else None,
         "siguiente": siguiente,
         "etiqueta": "Mañana" if siguiente == hoy + timedelta(days=1) else DIAS_SEMANA[siguiente.weekday()].capitalize(),
+        # Las reservas abren el último día laborable antes de la fecha: el viernes, las del lunes.
+        # Por eso en un día no laborable ya están abiertas, sea la hora que sea.
+        "abierta": not laborable or calendario.hora_actual() >= apertura,
+        "apertura": apertura.strftime("%H:%M"),
     }
 
 
@@ -243,7 +249,10 @@ def libres(request: Request, dia: str | None = None, conn=Conn):
 
 @app.get("/reservar/{plaza_id}")
 def reservar_form(request: Request, plaza_id: IdFila, dia: str | None = None, conn=Conn):
-    dia, fecha, _ = elegir_dia(conn, dia)
+    dia, fecha, dias = elegir_dia(conn, dia)
+    # El inicio ya explica a qué hora se abren las reservas
+    if dia == "siguiente" and not dias["abierta"]:
+        return redirect("/")
     plaza = models.get_plaza(conn, plaza_id)
     if plaza is None or not models.esta_libre(conn, plaza_id, fecha):
         return redirect("/", dia=dia, error="Esta plaza ya no está libre.")
@@ -303,10 +312,13 @@ def reservar(request: Request, plaza_id: IdFila, nombre: str = Form(...), fecha:
              conn=Conn):
     if bloqueo := demasiadas_reservas(request):
         return bloqueo
-    dia = dias_usuario(conn)["siguiente"]
+    dias = dias_usuario(conn)
+    dia = dias["siguiente"]
     # El formulario dice para qué día era: si ha pasado la medianoche, no se reserva otro día sin avisar
     if fecha != dia.isoformat():
         return redirect("/", error=DIA_CAMBIADO)
+    if not dias["abierta"]:
+        return redirect("/")
     error, token, nueva = models.reservar_usuario(conn, plaza_id, dia, nombre)
     if error:
         return redirect("/", error=error)
@@ -540,6 +552,7 @@ def admin_avisos(request: Request, conn=Conn):
 def admin_ajustes(request: Request, conn=Conn):
     return admin_page(request, conn, "admin_ajustes.html",
                       email=models.get_config(conn, "admin_email") or "",
+                      apertura=models.hora_apertura(conn).strftime("%H:%M"),
                       festivos=models.festivos_futuros(conn),
                       plazas=models.list_plazas(conn),
                       nombre_max=models.NOMBRE_MAX,
@@ -569,6 +582,12 @@ def admin_email(email: str = Form(""), conn=Conn):
         return redirect("/admin/ajustes", error="El correo no es válido.")
     models.set_config(conn, "admin_email", email)
     return redirect("/admin/ajustes", msg="Correo guardado.")
+
+
+@app.post("/admin/apertura", dependencies=admin_only)
+def admin_apertura(hora: str = Form(""), conn=Conn):
+    error = models.guardar_hora_apertura(conn, hora)
+    return redirect("/admin/ajustes", error=error, msg=None if error else f"Las reservas se abrirán a las {hora}.")
 
 
 @app.post("/admin/festivos", dependencies=admin_only)
