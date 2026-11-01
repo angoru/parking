@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Versión** | 1.13 |
+| **Versión** | 1.14 |
 | **Estado** | ✅ Implementado · quedan preguntas abiertas (§12) |
-| **Última revisión** | 30/10/2026 |
-| **Código** | `app/` · tests en `tests/test_app.py`, `tests/test_seguridad.py` y `tests/test_frontend.py` (131 casos, todos en verde) · arranque con Docker en el [README](README.md) |
+| **Última revisión** | 01/11/2026 |
+| **Código** | `app/` · tests en `tests/test_app.py`, `tests/test_seguridad.py` y `tests/test_frontend.py` (149 casos, todos en verde) · arranque con Docker en el [README](README.md) |
 
 **Leyenda de estado:** ✅ Implementado · 🟡 Parcial · ⬜ Pendiente
 
@@ -21,7 +21,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 - Conjunto de plazas definido por el administrador, con **la numeración real del garaje** (no tiene por qué ser consecutiva).
 - Plazas **fijas** (asignadas a un titular), que el admin puede liberar para un día concreto, y plazas **reservables**.
 - Reservas por día completo, indicando solo el nombre.
-- Reserva directa para el **siguiente día laborable**; para el mismo día, solicitud que el admin debe aprobar.
+- Reserva directa para el **siguiente día laborable**, a partir de una hora de apertura que fija el admin; para el mismo día, solicitud que el admin debe aprobar.
 - Calendario laboral de la ciudad de Madrid (2026 y 2027), que el admin puede ampliar.
 - Panel de administración con acceso por usuario y contraseña: tablero de ocupación, solicitudes, avisos y ajustes.
 
@@ -50,7 +50,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | Rol | Identificación | Permisos |
 |---|---|---|
 | **Usuario** | Solo su nombre. No tiene cuenta ni contraseña. | Ver las plazas libres, reservar para el siguiente día laborable y solicitar plaza para hoy. |
-| **Administrador** | Pantalla de acceso con usuario y contraseña. La primera vez se entra con **admin / admin** y la app obliga a elegir una contraseña propia. | Ver todas las plazas, liberar u ocupar cualquiera, aprobar o rechazar solicitudes, consultar avisos y configurar plazas, festivos, su correo de contacto y su contraseña. |
+| **Administrador** | Pantalla de acceso con usuario y contraseña. La primera vez se entra con **admin / admin** y la app obliga a elegir una contraseña propia. | Ver todas las plazas, liberar u ocupar cualquiera, aprobar o rechazar solicitudes, consultar avisos y configurar plazas, festivos, la hora de apertura de las reservas, su correo de contacto y su contraseña. |
 
 ## 5. Requisitos funcionales
 
@@ -60,6 +60,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 |---|---|---|
 | RF-01 | El usuario solo ve las plazas **libres**. Las reservadas y las fijas no se muestran. | ✅ |
 | RF-02 | El usuario puede **reservar una plaza para el siguiente día laborable**. La reserva es inmediata. Los viernes se reserva para el lunes, y los festivos también se saltan. | ✅ |
+| RF-02b | Antes de la **hora de apertura** (RN-03c) no se puede reservar para el siguiente día laborable: en lugar de las plazas libres se muestra a qué hora se abren las reservas. | ✅ |
 | RF-03 | Si pide plaza **para el mismo día**, no se reserva: se **envía una solicitud al admin**. | ✅ |
 | RF-04 | Para reservar o solicitar solo hay que **escribir el nombre, en un único campo**. | ✅ |
 | RF-05 | Al terminar se muestra la confirmación **"Has reservado la plaza N"** (o "Has solicitado…") con la fecha, y el aviso **"Si quieres cancelar, envía un correo al admin"**, que incluye un enlace al correo si está configurado. | ✅ |
@@ -85,6 +86,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | RF-17b | Cada plaza se edita **en una sola línea**: número, titular, guardar (✓) y eliminar (✕). **Si tiene titular, es fija; si el titular está vacío, es reservable.** | ✅ |
 | RF-18 | El admin puede **añadir y eliminar festivos**. | ✅ |
 | RF-19 | El admin puede configurar el **correo de contacto** que ve el usuario tras reservar. | ✅ |
+| RF-19b | El admin puede cambiar la **hora de apertura** de las reservas en Ajustes. Por defecto son las **08:00**; con **00:00** se puede reservar a cualquier hora. | ✅ |
 | RF-20 | El panel avisa de lo que falta configurar: el **correo de contacto** y, desde noviembre, los **festivos del año siguiente**. Al añadir un festivo en un día con reservas, indica cuántas hay. | ✅ |
 | RF-21 | Si el admin olvida su contraseña, se restablece desde el servidor con `python -m app.restablecer_password` (ver el README). | ✅ |
 
@@ -96,6 +98,7 @@ Ofrecer una aplicación web sencilla, pensada sobre todo para el móvil, para re
 | RN-02 | Cada nombre puede tener como máximo **una reserva o una solicitud pendiente por día**. Al comparar nombres no se distinguen mayúsculas, minúsculas ni tildes («Álvaro» = «ALVARO»). El titular de una plaza fija **puede** reservar además otra plaza. |
 | RN-03b | El formulario lleva la fecha para la que se abrió. Si al enviarlo ya no es la que toca (por ejemplo, pasada la medianoche), no se reserva y se pide volver a elegir. |
 | RN-03 | La reserva directa siempre es para el **siguiente día laborable**. El usuario no puede elegir otra fecha. |
+| RN-03c | Las reservas para un día se abren a la **hora de apertura del último día laborable anterior**: el viernes a las 08:00 se abren las del lunes. En un día no laborable ya están abiertas, sea la hora que sea. La hora no afecta a las solicitudes para hoy ni a lo que hace el admin. |
 | RN-04 | Solo se pueden solicitar plazas para hoy si **hoy es laborable**. Los fines de semana y festivos no aparece la pestaña "Hoy". |
 | RN-05 | Una solicitud **no bloquea** la plaza, así que puede haber varias para la misma. Si al aprobar una la plaza ya está ocupada, esa solicitud se **rechaza automáticamente** indicando el motivo. |
 | RN-06 | Una liberación afecta a **una sola fecha**. Ese día, la plaza fija funciona como reservable; antes y después sigue cerrada. Para cederla varios días hay que liberar cada día por separado. Si el admin la ocupa sin indicar nombre, o con el nombre del titular, vuelve a su titular. |
@@ -153,7 +156,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 ## 9. Flujos principales
 
 **Reservar para el siguiente día laborable**
-1. El usuario abre la app y ve las plazas libres del siguiente día laborable, en la pestaña "Mañana" o con el nombre del día de la semana.
+1. A partir de la hora de apertura, el usuario abre la app y ve las plazas libres del siguiente día laborable, en la pestaña "Mañana" o con el nombre del día de la semana.
 2. Toca una plaza libre, escribe su nombre y confirma.
 3. Ve "Has reservado la plaza N" junto con cómo cancelar. El admin recibe un aviso.
 
@@ -187,7 +190,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | Tablero de ocupación | `/admin` | Admin |
 | Solicitudes pendientes | `/admin/solicitudes` | Admin |
 | Avisos | `/admin/avisos` | Admin |
-| Ajustes: alta y numeración de plazas, correo y festivos | `/admin/ajustes` | Admin |
+| Ajustes: alta y numeración de plazas, hora de apertura, correo y festivos | `/admin/ajustes` | Admin |
 
 ## 11. Requisitos no funcionales
 
@@ -218,7 +221,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | P-01 | **Canal de los avisos** | El aviso solo se ve al entrar en el panel de admin. | Enviarlo además por email, Telegram o notificación del móvil, para que llegue sin abrir la app. |
 | P-02 | ~~Resultado de la solicitud~~ | **Resuelto en 1.8:** el inicio muestra el estado en «En este dispositivo» (RF-08). | — |
 | P-03 | ~~Contraseña por defecto~~ | **Resuelto en 1.6:** la app obliga a cambiarla en el primer acceso. | — |
-| P-04 | **Hora de apertura y cierre** para reservar el siguiente día laborable | Se puede reservar desde las 00:00 del día anterior hasta las 23:59: gana quien reserve justo después de medianoche. | ¿Fijar una hora de apertura (por ejemplo, las 18:00 del día anterior) o de cierre? |
+| P-04 | ~~Hora de apertura~~ | **Resuelto en 1.14:** el admin fija la hora de apertura (RN-03c). No hay hora de cierre. | — |
 | P-05 | **Autogestión del titular** | Solo el admin puede liberar una plaza fija. | Permitir que el titular la ceda él mismo. |
 | P-06 | **Histórico** | Las reservas pasadas se guardan, pero no se pueden consultar. | Añadir una pantalla de histórico o una exportación a CSV. |
 | P-07 | **Despliegue** | El repositorio no incluye despliegue: se decidirá dónde y cómo se publica. Los requisitos están en el README. | Definirlo fuera de este repositorio, sin subir credenciales. |
@@ -250,6 +253,7 @@ Se consideran no laborables los **sábados, los domingos y los festivos** de la 
 | 1.11 | 30/10/2026 | **Releases**: subir a `main` ya no despliega; a producción llegan las releases de GitHub, y la reconstrucción semanal parte de la última. Se documenta cómo desplegar en otro servidor. |
 | 1.12 | 30/10/2026 | **Repaso del frontend**: el tablero ya no se desborda en el móvil con nombres largos, que además se muestran enteros; contraste AA en los dos modos; foco visible, objetivos táctiles de 44 px y estructura accesible; rechazar una solicitud o borrar un festivo piden confirmación; CSS reorganizado con nombres coherentes y variables; CSP sin `unsafe-inline`. |
 | 1.13 | 30/10/2026 | **Sin despliegue en el repositorio**: se eliminan el pipeline de despliegue, sus secretos, los ficheros del servidor y `DEPLOY.md`. Docker pasa a ser la forma de arrancar el proyecto, con `compose.yaml`. CI se limita a tests, auditoría y construcción de la imagen. |
+| 1.14 | 01/11/2026 | **Hora de apertura de las reservas**: el siguiente día laborable se puede reservar a partir de una hora que el admin configura en Ajustes, por defecto las 08:00 (resuelve P-04). |
 
 ---
 
